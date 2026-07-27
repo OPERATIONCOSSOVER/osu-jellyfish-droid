@@ -2,6 +2,7 @@ package com.osudroid.ui.v2.taiko
 
 import android.util.Log
 import com.osudroid.GameMode
+import com.osudroid.beatmaps.constants.SampleBank
 import com.osudroid.beatmaps.hitobjects.BankHitSampleInfo
 import com.osudroid.beatmaps.hitobjects.HitCircle
 import com.osudroid.beatmaps.hitobjects.HitObject
@@ -1065,9 +1066,16 @@ class TaikoGameScene private constructor(
         releaseHit(candidate)
     }
 
+    /**
+     * Plays the raw don/kat tap feedback.
+     *
+     * The sound comes from the taiko sample banks in `assets/sfx` (see [TaikoHitSounds]); the
+     * osu!standard samples are never used as a fallback, so a missing taiko sound is silent.
+     */
     private fun playInputSound(isKat: Boolean) {
         val name = if (isKat) BankHitSampleInfo.HIT_WHISTLE else BankHitSampleInfo.HIT_NORMAL
-        resources.getSound(name, false)?.play()
+        val lookupName = "${TaikoHitSounds.PREFIX}${SampleBank.Normal.prefix}-$name"
+        resources.getSound(lookupName, false)?.play()
     }
 
     private fun registerMiss(obj: TaikoObject) {
