@@ -2,6 +2,7 @@ package com.osudroid.ui.v2.taiko
 
 import android.util.Log
 import com.osudroid.GameMode
+import com.osudroid.beatmaps.constants.SampleBank
 import com.osudroid.beatmaps.hitobjects.BankHitSampleInfo
 import com.osudroid.beatmaps.hitobjects.HitCircle
 import com.osudroid.beatmaps.hitobjects.HitObject
@@ -892,13 +893,7 @@ class TaikoGameScene private constructor(
         triggerHitExplosion(isKat, obj.isBig)
         maxCombo = max(maxCombo, combo)
 
-        obj.samples.forEach { sample ->
-            com.osudroid.game.GameplayHitSampleInfo.obtain().also {
-                it.init(sample)
-                it.play()
-                it.release()
-            }
-        }
+        playSamples(obj)
         releaseHit(obj)
     }
 
@@ -1012,7 +1007,7 @@ class TaikoGameScene private constructor(
             health = (health + 0.0025f).coerceAtMost(1f)
             showJudgement(if (activeRoll.kind == ObjectKind.Denden) "DEN!" else "ROLL", Color4(0xFFFFC107))
             triggerHitExplosion(isKat, false)
-            playInputSound(isKat)
+            playInputSound(isKat, now)
             return
         }
 
@@ -1026,13 +1021,13 @@ class TaikoGameScene private constructor(
             .minByOrNull { abs(now - it.startTime) }
 
         if (candidate == null) {
-            playInputSound(isKat)
+            playInputSound(isKat, now)
             return
         }
 
         val expectsKat = candidate.kind == ObjectKind.Kat
         if (expectsKat != isKat) {
-            playInputSound(isKat)
+            playInputSound(isKat, now)
             return
         }
 
@@ -1055,19 +1050,128 @@ class TaikoGameScene private constructor(
 
         triggerHitExplosion(isKat, candidate.isBig)
         maxCombo = max(maxCombo, combo)
-        candidate.samples.forEach { sample ->
+        playSamples(candidate)
+        releaseHit(candidate)
+    }
+
+    /**
+     * The sample names a note plays, chosen by note type rather than by whichever addition the
+     * mapper happened to use.
+     *
+     * A kat may be written as a whistle, a clap, or both, and any of them may sit on top of the
+     * base `hitnormal` sample. Playing the object's raw sample list therefore makes identical
+     * notes sound different from map to map, and stacks a don underneath every kat. The note type
+     * is authoritative instead:
+     *
+     * - Don: `hitnormal`
+     * - Kat: `hitclap`
+     * - Big don: `hitnormal` with `hitfinish`
+     * - Big kat: `hitwhistle` with `hitfinish`
+     */
+    private fun sampleNamesFor(obj: TaikoObject): List<String> = when {
+        obj.kind == ObjectKind.Kat && obj.isBig ->
+            listOf(BankHitSampleInfo.HIT_WHISTLE, BankHitSampleInfo.HIT_FINISH)
+
+        obj.kind == ObjectKind.Kat -> listOf(BankHitSampleInfo.HIT_CLAP)
+
+        obj.isBig -> listOf(BankHitSampleInfo.HIT_NORMAL, BankHitSampleInfo.HIT_FINISH)
+
+        else -> listOf(BankHitSampleInfo.HIT_NORMAL)
+    }
+
+    /**
+     * Returns the samples osu!taiko actually plays for [obj], rebuilt from [sampleNamesFor].
+     *
+     * One of the object's own bank samples is used as the template, so the bank, custom sample
+     * index and volume the mapper set all carry over untouched and only the sample name is
+     * replaced. Storyboarded file samples are left alone, and drumrolls and dendens keep playing
+     * whatever the map gave them.
+     */
+    private fun playableSamples(obj: TaikoObject): List<HitSampleInfo> {
+        if (obj.kind != ObjectKind.Don && obj.kind != ObjectKind.Kat) {
+            return obj.samples
+        }
+
+        val bankSamples = obj.samples.filterIsInstance<BankHitSampleInfo>()
+
+        // Prefer the base sample as the template: it is the one that always carries the object's
+        // own bank rather than an addition bank.
+        val template = bankSamples.firstOrNull { it.name == BankHitSampleInfo.HIT_NORMAL }
+            ?: bankSamples.firstOrNull()
+            // Never go silent: an object with no bank sample at all keeps what it had.
+            ?: return obj.samples
+
+        val fileSamples = obj.samples.filter { it !is BankHitSampleInfo }
+
+        return sampleNamesFor(obj).map { template.copy(name = it) } + fileSamples
+    }
+
+    private fun playSamples(obj: TaikoObject) {
+        playableSamples(obj).forEach { sample ->
             com.osudroid.game.GameplayHitSampleInfo.obtain().also {
                 it.init(sample)
                 it.play()
                 it.release()
             }
         }
-        releaseHit(candidate)
     }
 
-    private fun playInputSound(isKat: Boolean) {
-        val name = if (isKat) BankHitSampleInfo.HIT_WHISTLE else BankHitSampleInfo.HIT_NORMAL
-        resources.getSound(name, false)?.play()
+    /** The sample bank an object is hitsounded with, defaulting to the normal bank. */
+    private fun bankOf(obj: TaikoObject): SampleBank =
+        obj.samples.filterIsInstance<BankHitSampleInfo>().firstOrNull()?.bank ?: SampleBank.Normal
+
+    /**
+     * The sample bank in effect at [now], taken from the object closest in time. Taps that do not
+     * land on a note then follow the surrounding hitsounding instead of always using the normal
+     * bank.
+     */
+    private fun activeBank(now: Double): SampleBank {
+        var closest: TaikoObject? = null
+        var closestDistance = Double.MAX_VALUE
+
+        // Objects are ordered by time, so the search can stop as soon as it starts moving away.
+        for (index in (firstActiveIndex - 1).coerceAtLeast(0) until objects.size) {
+            val obj = objects[index]
+            val distance = abs(now - obj.startTime)
+
+            if (distance < closestDistance) {
+                closestDistance = distance
+                closest = obj
+            } else if (obj.startTime > now) {
+                break
+            }
+        }
+
+        return closest?.let { bankOf(it) } ?: SampleBank.Normal
+    }
+
+    /**
+     * Plays the raw don/kat tap feedback for the sample bank in effect at [now]. The sample names
+     * match what a note of the same colour plays, so a tap that misses everything still sounds
+     * like the drum it was aimed at.
+     *
+     * Normal and soft banks come from the taiko sample banks in `assets/sfx` (see
+     * [TaikoHitSounds]) and never fall back to the osu!standard samples, so a missing taiko sound
+     * stays silent. Drum banks use the osu!standard drum samples, matching how [TaikoHitSounds]
+     * resolves gameplay samples.
+     */
+    private fun playInputSound(isKat: Boolean, now: Double) {
+        val name = if (isKat) BankHitSampleInfo.HIT_CLAP else BankHitSampleInfo.HIT_NORMAL
+
+        val lookupNames = when (activeBank(now)) {
+            SampleBank.Drum -> listOf("${SampleBank.Drum.prefix}-$name", name)
+            SampleBank.Soft -> listOf("${TaikoHitSounds.PREFIX}${SampleBank.Soft.prefix}-$name")
+            else -> listOf("${TaikoHitSounds.PREFIX}${SampleBank.Normal.prefix}-$name")
+        }
+
+        for (lookupName in lookupNames) {
+            val sound = resources.getSound(lookupName, false)
+
+            if (sound != null) {
+                sound.play()
+                return
+            }
+        }
     }
 
     private fun registerMiss(obj: TaikoObject) {

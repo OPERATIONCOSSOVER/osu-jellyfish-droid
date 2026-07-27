@@ -25,8 +25,15 @@ import java.util.Calendar
  * When a subfolder matching the current season exists and contains images, those are used.
  * Otherwise any image sitting directly in the folder root is used.
  *
- * The matching images form a shuffled playlist. With the slideshow enabled the menu walks through
- * it, crossfading between entries; otherwise the first entry is simply kept for the session.
+ * The matching images form a shuffled playlist. While the setting is enabled the menu always shows
+ * an entry from that playlist and never a beatmap background; beatmap backgrounds are only used
+ * when the setting is off.
+ *
+ * The playlist moves on in two ways:
+ *
+ * - Every time the menu resolves its background again, which happens when the menu is returned to
+ *   and when the song is changed with the next/previous buttons. This is [load].
+ * - On a timer, while the slideshow setting is enabled. This is [next].
  */
 object SeasonalBackgroundManager {
 
@@ -46,6 +53,22 @@ object SeasonalBackgroundManager {
     const val MIN_INTERVAL_SECONDS = 5
 
     private const val TAG = "SeasonalBackground"
+
+    /**
+     * How long a failed scan is remembered for, in milliseconds. Keeps a missing or unreadable
+     * folder from being rescanned on every single background change without giving up on it for the
+     * rest of the session.
+     */
+    private const val RESOLVE_RETRY_COOLDOWN_MS = 5000L
+
+    /**
+     * How close together two [load] calls have to be, in milliseconds, to be treated as the same
+     * menu event.
+     *
+     * A single return to the menu or song change can ask for the background more than once, and
+     * each of those asks would otherwise skip an image.
+     */
+    private const val ADVANCE_DEBOUNCE_MS = 1000L
 
     /**
      * Two names are alternated rather than reusing a single one. A slide is still fading out while
@@ -70,11 +93,15 @@ object SeasonalBackgroundManager {
     private var slot = 0
 
     /**
-     * Whether the first slide has been resolved for this session. Tracked separately from
-     * [currentRegion] so that a folder with no usable images is not rescanned on every background
-     * change.
+     * When the folder was last scanned without finding anything usable, as a
+     * [System.currentTimeMillis] timestamp.
      */
-    private var isResolved = false
+    private var lastFailedScanTime = 0L
+
+    /**
+     * When the playlist last moved on, as a [System.currentTimeMillis] timestamp.
+     */
+    private var lastAdvanceTime = 0L
 
     private var currentRegion: TextureRegion? = null
 
@@ -99,8 +126,8 @@ object SeasonalBackgroundManager {
     fun isEnabled() = Config.getBoolean(PREFERENCE_KEY, false)
 
     /**
-     * Whether the background should cycle. False when there is nothing to cycle between, so that
-     * the caller does not run a timer for a single image.
+     * Whether the background should also cycle on a timer. False when there is nothing to cycle
+     * between, so that the caller does not run a timer for a single image.
      */
     @JvmStatic
     fun isSlideshowEnabled(): Boolean {
@@ -136,8 +163,15 @@ object SeasonalBackgroundManager {
     }
 
     /**
-     * The texture currently being shown, loading the first slide if nothing has been shown yet.
-     * Returns `null` when the setting is disabled or no usable image could be found.
+     * Resolves the background the menu should show, moving the playlist on by one entry.
+     *
+     * The menu resolves its background again when it is returned to and when the song is changed,
+     * so each of those shows a different seasonal image. Asks that arrive within
+     * [ADVANCE_DEBOUNCE_MS] of each other belong to the same event and are answered with the image
+     * already on screen.
+     *
+     * Returns `null` when the setting is disabled or no usable image could be found, which is what
+     * makes the menu fall back to the beatmap background.
      *
      * Must be called from a thread that is allowed to upload textures, in the same way as the other
      * [ResourceManager] loading calls made from the main menu.
@@ -148,28 +182,50 @@ object SeasonalBackgroundManager {
             return null
         }
 
-        if (isResolved) {
-            return currentRegion
-        }
-
-        // Marked as resolved regardless of the outcome, a missing or empty folder should not be
-        // rescanned every time the background changes.
-        isResolved = true
-
-        val files = getPlaylist()
+        val now = System.currentTimeMillis()
+        var files = getPlaylist()
 
         if (files.isEmpty()) {
-            return null
+            // The folder is not always readable by the time the menu first asks for a background, so
+            // a fruitless scan is retried rather than remembered for the whole session. Without this
+            // the menu would fall back to beatmap backgrounds even though the setting is on.
+            if (now - lastFailedScanTime < RESOLVE_RETRY_COOLDOWN_MS) {
+                return currentRegion
+            }
+
+            lastFailedScanTime = now
+            playlist = null
+            playlistIndex = 0
+            files = getPlaylist()
+
+            if (files.isEmpty()) {
+                return currentRegion
+            }
         }
 
-        playlistIndex = 0
+        val current = currentRegion
 
-        return loadSlide(files[0])
+        if (current == null) {
+            playlistIndex = 0
+            lastAdvanceTime = now
+
+            return loadSlide(files[0])
+        }
+
+        // Several asks belonging to the same menu event must not skip images.
+        if (now - lastAdvanceTime < ADVANCE_DEBOUNCE_MS || files.size < 2) {
+            return current
+        }
+
+        lastAdvanceTime = now
+        playlistIndex = (playlistIndex + 1) % files.size
+
+        return loadSlide(files[playlistIndex]) ?: current
     }
 
     /**
      * Advances to the next slide and returns its texture, or `null` when there is nothing to
-     * advance to. Wraps around at the end of the playlist.
+     * advance to. Wraps around at the end of the playlist. Used by the slideshow timer.
      */
     @JvmStatic
     fun next(): TextureRegion? {
@@ -183,6 +239,7 @@ object SeasonalBackgroundManager {
             return null
         }
 
+        lastAdvanceTime = System.currentTimeMillis()
         playlistIndex = (playlistIndex + 1) % files.size
 
         return loadSlide(files[playlistIndex])
@@ -196,7 +253,8 @@ object SeasonalBackgroundManager {
         playlist = null
         playlistIndex = 0
         currentRegion = null
-        isResolved = false
+        lastFailedScanTime = 0L
+        lastAdvanceTime = 0L
     }
 
     /**

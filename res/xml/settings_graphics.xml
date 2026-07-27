@@ -62,6 +62,13 @@
             app:showSeekBarValue="true"
             app:layout="@layout/settings_preference_seekbar" />
 
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="themeSong"
+            android:summary="Play the osu! theme song on the main menu"
+            android:title="Theme song"
+            app:layout="@layout/settings_preference_checkbox" />
+
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/opt_category_hud">

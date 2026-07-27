@@ -13,7 +13,7 @@ import ru.nsu.ccfit.zuev.osu.Config
 import ru.nsu.ccfit.zuev.osu.helper.*
 import ru.nsu.ccfit.zuev.osu.online.*
 import ru.nsu.ccfit.zuev.osuplus.BuildConfig
-import java.io.*
+import java.io.File
 
 object UpdateManager: IFileRequestObserver
 {
@@ -28,6 +28,13 @@ object UpdateManager: IFileRequestObserver
     fun onActivityStart() = mainThread {
 
         val activity = GlobalManager.getInstance().mainActivity
+
+        // In an offline build there is no changelog to open and no update endpoint to ask, so the
+        // stored version is refreshed and nothing else happens.
+        if (OnlineManager.OFFLINE_MODE) {
+            Config.setLong("version", activity.versionCode)
+            return@mainThread
+        }
 
         // -1 indicates the first run of the game.
         val version = Config.getLong("version", -1)
@@ -59,6 +66,15 @@ object UpdateManager: IFileRequestObserver
      */
     @JvmStatic
     fun checkNewUpdates(silently: Boolean) {
+
+        if (OnlineManager.OFFLINE_MODE) {
+            Log.i("UpdateManager", "Update check skipped, offline build.")
+
+            if (!silently) {
+                ToastLogger.showText(R.string.update_info_latest, false)
+            }
+            return
+        }
 
         if (!silently) {
             ToastLogger.showText(R.string.update_info_checking, false)

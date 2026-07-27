@@ -2,34 +2,40 @@ package ru.nsu.ccfit.zuev.osu.online;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.os.Bundle;
-
-import com.google.firebase.analytics.FirebaseAnalytics;
 
 import com.osudroid.data.BeatmapInfo;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 
-import okhttp3.Request;
 import okhttp3.RequestBody;
 import org.anddev.andengine.util.Debug;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 
 import ru.nsu.ccfit.zuev.osu.Config;
-import ru.nsu.ccfit.zuev.osu.GlobalManager;
 import ru.nsu.ccfit.zuev.osu.ResourceManager;
 import ru.nsu.ccfit.zuev.osu.helper.FileUtils;
-import org.json.JSONException;
-import org.json.JSONObject;
 import ru.nsu.ccfit.zuev.osu.*;
 import ru.nsu.ccfit.zuev.osu.helper.MD5Calculator;
 import ru.nsu.ccfit.zuev.osu.online.PostBuilder.RequestException;
 import ru.nsu.ccfit.zuev.osu.scoring.BeatmapLeaderboardScoringMode;
 
 public class OnlineManager {
+
+    /**
+     * Master switch for the offline-only build.
+     * <p>
+     * While this is {@code true} the game never talks to the osu!droid server: logging in, score
+     * submission, leaderboards, avatars, profile banners, ranked-status lookups and update checks
+     * are all short-circuited before any request is built. Everything that does not need a server
+     * (local beatmaps, local scores, replays, skins) keeps working exactly as before.
+     */
+    public static final boolean OFFLINE_MODE = true;
+
+    /** Message shown wherever a server error message would normally be displayed. */
+    public static final String OFFLINE_MESSAGE = "Offline build, online features are disabled";
+
     public static final String hostname = "osudroid.moe";
     public static final String endpoint = "https://" + hostname + "/api/";
     public static final String updateEndpoint = endpoint + "update.php?lang=";
@@ -42,7 +48,7 @@ public class OnlineManager {
     private static OnlineManager instance = null;
     private String failMessage = "";
 
-    private boolean stayOnline = true;
+    private boolean stayOnline = !OFFLINE_MODE;
     private String ssid = "";
     private long userId = -1L;
 
@@ -80,13 +86,27 @@ public class OnlineManager {
     }
 
     public void init() {
-        this.stayOnline = Config.isStayOnline();
         this.username = Config.getOnlineUsername();
         this.password = Config.getOnlinePassword();
         this.deviceID = Config.getOnlineDeviceID();
+
+        if (OFFLINE_MODE) {
+            Debug.i("OnlineManager: offline build, staying offline.");
+            this.stayOnline = false;
+            this.failMessage = OFFLINE_MESSAGE;
+            return;
+        }
+
+        this.stayOnline = Config.isStayOnline();
     }
 
     private ArrayList<String> sendRequest(PostBuilder post, String url) throws OnlineManagerException {
+        if (OFFLINE_MODE) {
+            Debug.i("OnlineManager: request to " + url + " skipped, offline build.");
+            failMessage = OFFLINE_MESSAGE;
+            return null;
+        }
+
         ArrayList<String> response;
         try {
             response = post.requestWithAttempts(url, 3);
@@ -96,13 +116,6 @@ public class OnlineManager {
             throw new OnlineManagerException("Cannot connect to server", e);
         }
         failMessage = "";
-
-        //TODO debug code
-		/*Debug.i("Received " + response.size() + " lines");
-		for(String str: response)
-		{
-			Debug.i(str);
-		}*/
 
         if (response.size() == 0 || response.get(0).length() == 0) {
             failMessage = "Got empty response";
@@ -135,6 +148,13 @@ public class OnlineManager {
     public synchronized boolean logIn(String username, String password) throws OnlineManagerException {
         this.username = username;
         this.password = password;
+
+        if (OFFLINE_MODE) {
+            Debug.i("OnlineManager: log in skipped, offline build.");
+            stayOnline = false;
+            failMessage = OFFLINE_MESSAGE;
+            return false;
+        }
 
         PostBuilder post = new URLEncodedPostBuilder();
         post.addParam("username", username);
@@ -170,10 +190,6 @@ public class OnlineManager {
         }
         profileBannerURL = getProfileBannerURL(userId);
 
-        Bundle bParams = new Bundle();
-        bParams.putString(FirebaseAnalytics.Param.METHOD, "ingame");
-        GlobalManager.getInstance().getMainActivity().getAnalytics().logEvent(FirebaseAnalytics.Event.LOGIN, bParams);
-
         return true;
     }
 
@@ -186,6 +202,12 @@ public class OnlineManager {
     }
 
     public boolean sendRecord(BeatmapInfo beatmap, String scoreData, String replayPath) throws OnlineManagerException {
+        if (OFFLINE_MODE) {
+            Debug.i("OnlineManager: score submission skipped, offline build.");
+            failMessage = "";
+            return false;
+        }
+
         Debug.i("Sending record...");
 
         File replayFile = new File(replayPath);
@@ -244,6 +266,10 @@ public class OnlineManager {
     }
 
     public ArrayList<String> getTop(final String hash) throws OnlineManagerException {
+        if (OFFLINE_MODE) {
+            return new ArrayList<>();
+        }
+
         PostBuilder post = new URLEncodedPostBuilder();
         post.addParam("hash", hash);
         post.addParam("uid", String.valueOf(userId));
@@ -266,20 +292,8 @@ public class OnlineManager {
     }
 
     public RankedStatus getBeatmapStatus(String md5) throws OnlineManagerException {
-        var builder = new Request.Builder().url("https://osu.direct/api/v2/md5/" + md5);
-        var request = builder.build();
-
-        try (var response = client.newCall(request).execute()) {
-            if (response.isSuccessful() && response.body() != null) {
-                var json = new JSONObject(response.body().string());
-                return RankedStatus.valueOf(json.optInt("ranked"));
-            }
-        } catch (final IOException e) {
-            Debug.e("getBeatmapStatus IOException " + e.getMessage(), e);
-        } catch (final JSONException e) {
-            Debug.e("getBeatmapStatus JSONException " + e.getMessage(), e);
-        } catch (final IllegalArgumentException e) {
-            Debug.e("getBeatmapStatus IllegalArgumentException " + e.getMessage(), e);
+        if (OFFLINE_MODE) {
+            return null;
         }
 
         return null;
@@ -294,11 +308,14 @@ public class OnlineManager {
     }
 
     public boolean loadAvatarToTextureManager(String avatarURL) {
+        if (OFFLINE_MODE) {
+            return false;
+        }
+
         if (avatarURL == null || avatarURL.isEmpty()) return false;
 
         String filename = MD5Calculator.getStringMD5(avatarURL);
         Debug.i("Loading avatar from " + avatarURL);
-        Debug.i("filename = " + filename);
         File picfile = new File(Config.getCachePath(), filename);
         OnlineFileOperator.downloadFile(avatarURL, picfile.getAbsolutePath(), true);
 
@@ -316,32 +333,16 @@ public class OnlineManager {
             if (ResourceManager.getInstance().getAvatarTextureIfLoaded(avatarURL) != null) {
                 return true;
             }
-        } else {
-            // Avatar not found, download the default avatar
-            String defaultAvatarFilename = MD5Calculator.getStringMD5(defaultAvatarURL);
-            File avatarFile = new File(Config.getCachePath(), defaultAvatarFilename);
-            OnlineFileOperator.downloadFile(defaultAvatarURL, avatarFile.getAbsolutePath());
-
-            bitmap = loadFileToBitmap(avatarFile);
-            if (bitmap != null) {
-                imageWidth = bitmap.getWidth();
-                imageHeight = bitmap.getHeight();
-            }
-
-            if (imageWidth * imageHeight > 0) {
-                //Avatar has been cached locally
-                ResourceManager.getInstance().loadHighQualityFile(defaultAvatarFilename, avatarFile);
-                if (ResourceManager.getInstance().getAvatarTextureIfLoaded(defaultAvatarURL) != null) {
-                    return true;
-                }
-            }
         }
 
-        Debug.i("Success!");
         return false;
     }
 
     public boolean loadProfileBannerToTextureManager(String bannerURL) {
+        if (OFFLINE_MODE) {
+            return false;
+        }
+
         if (bannerURL == null || bannerURL.isEmpty()) return false;
 
         if (ResourceManager.getInstance().getProfileBannerTextureIfLoaded(bannerURL) != null) {
@@ -384,6 +385,10 @@ public class OnlineManager {
     }
 
     public String getScorePack(int playid) throws OnlineManagerException {
+        if (OFFLINE_MODE) {
+            return "";
+        }
+
         PostBuilder post = new URLEncodedPostBuilder();
         post.addParam("playID", String.valueOf(playid));
 
@@ -451,10 +456,15 @@ public class OnlineManager {
     }
 
     public boolean isStayOnline() {
-        return stayOnline;
+        return !OFFLINE_MODE && stayOnline;
     }
 
     public void setStayOnline(boolean stayOnline) {
+        if (OFFLINE_MODE) {
+            this.stayOnline = false;
+            return;
+        }
+
         this.stayOnline = stayOnline;
     }
 
