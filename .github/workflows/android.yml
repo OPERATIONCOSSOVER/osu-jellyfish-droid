@@ -55,8 +55,8 @@ jobs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: 20260727-taiko-beta.1
-        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 1
+        RELEASE_TAG: 20260727-taiko-beta.2
+        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 2
         RELEASE_TARGET: ${{ github.event.pull_request.head.sha }}
       run: |
         mapfile -t apks < <(
@@ -69,12 +69,17 @@ jobs:
         fi
 
         cat > release-notes.md <<'EOF'
-        ## osu!jellyfish 20260727 Taiko Beta 1
+        ## osu!jellyfish 20260727 Taiko Beta 2
 
-        This experimental release adds native **osu!taiko** gameplay.
+        This experimental release adds native **osu!taiko** gameplay with a redesigned
+        stable-style Taiko playfield.
 
         - Detects native Taiko beatmaps from `[General] Mode: 1`.
         - Adds an **osu!taiko (BETA)** ruleset selector in song select.
+        - Places the Taiko lane across the upper third with the beatmap background below it.
+        - Reuses the existing skinnable score, accuracy, combo, progress, and health HUD.
+        - Restores the existing two-second beatmap song intro and long-intro skip control.
+        - Uses invisible full-height controls: outer quarters are Kat and inner quarters are Don.
         - Supports Don, Kat, big notes, drumrolls, denden, scoring, combo, and accuracy.
         - Rescans existing song folders once after upgrading so previously ignored Taiko maps appear.
 
