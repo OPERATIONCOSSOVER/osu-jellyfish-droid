@@ -61,6 +61,13 @@ import ru.nsu.ccfit.zuev.osu.ResourceManager
 import ru.nsu.ccfit.zuev.osu.ToastLogger
 import ru.nsu.ccfit.zuev.skins.BeatmapSkinManager
 import ru.nsu.ccfit.zuev.skins.OsuSkin
+import ru.nsu.ccfit.zuev.osu.scoring.ScoringScene
+import ru.nsu.ccfit.zuev.osu.scoring.StatisticV2
+import com.osudroid.ui.v2.GameLoaderScene
+import com.osudroid.ui.v2.hud.GameplayHUD
+import ru.nsu.ccfit.zuev.osu.game.GameScene
+import ru.nsu.ccfit.zuev.osu.menu.SongMenu
+import java.util.concurrent.CompletableFuture
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -181,6 +188,12 @@ class TaikoGameScene private constructor(
     private var rollHits = 0
     private var health = 0f
     private val isAutoPlay = mods.contains(ModAutoplay::class.java)
+
+    /** Adapter bridging TaikoGameScene to GameScene for ScoringScene/GameLoaderScene. */
+    private var gameAdapter: TaikoGameSceneAdapter? = null
+
+    /** ScoringScene instance wired to the taiko adapter. */
+    private var scoringScene: ScoringScene? = null
 
     init {
         // Keep the selected beatmap background visible below the Taiko lane.
@@ -307,7 +320,7 @@ class TaikoGameScene private constructor(
 
         circle {
             x = targetX - targetDiameter * 0.36f
-            y = laneY - targetDiameter * 0.36f
+            y = targetDiameter.let { laneY - it * 0.36f }
             width = targetDiameter * 0.72f
             height = targetDiameter * 0.72f
             color = Color4(0xFFFFFFFF)
@@ -544,6 +557,20 @@ class TaikoGameScene private constructor(
         }
     }
 
+    /**
+     * Creates the GameScene adapter and GameLoaderScene (standard beatmap intro screen),
+     * then starts async beatmap loading. The GameLoaderScene replaces the placeholder songIntro.
+     */
+    fun beginLoadingWithLoader() {
+        val adapter = TaikoGameSceneAdapter(this)
+        gameAdapter = adapter
+
+        val loader = GameLoaderScene(adapter, beatmapInfo, mods, false)
+        global.engine.scene = loader
+
+        beginLoading()
+    }
+
     private fun beginLoading() {
         loadingJob = loadingScope.launch {
             try {
@@ -601,6 +628,7 @@ class TaikoGameScene private constructor(
                     skipButton.isVisible = calculatedSkipTarget > 1000.0
                     loadingText.text = "Ready"
                     isBeatmapLoaded = true
+                    gameAdapter?.isReadyToStart = true
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) {
@@ -768,7 +796,9 @@ class TaikoGameScene private constructor(
     }
 
     private fun beginGameplay() {
+        if (isReady) return
         songIntro.isVisible = false
+        global.engine.scene = this
         isReady = true
 
         if (leadInRemaining <= 0.0) {
@@ -1325,26 +1355,35 @@ class TaikoGameScene private constructor(
         }
         updateHud(lastObjectEndTime, 0.2f)
 
-        val accuracy = calculateAccuracy() * 100
-
-        modalTitle.text = String.format(
-            Locale.US,
-            "osu!taiko (BETA) complete\nScore %,d  •  %.2f%%\n%d GREAT  •  %d GOOD  •  %d MISS\nMax combo %dx  •  %d roll hits",
-            score,
-            accuracy,
-            greatCount,
-            goodCount,
-            missCount,
-            maxCombo,
-            rollHits
-        )
-        primaryButton.apply {
-            isVisible = true
-            text = "Play again"
-            onActionUp = { restart() }
+        // Build a StatisticV2 from taiko stats so the existing standard results screen can display them.
+        val stat = StatisticV2().apply {
+            setMod(mods)
+            setPlayerName(Config.getOnlineUsername())
+            setTime(System.currentTimeMillis())
+            setHit300(greatCount)
+            setHit100(goodCount)
+            setMisses(missCount)
+            setScoreMaxCombo(maxCombo)
+            setTotalScore(score.toLong())
+            setBeatmapNoteCount(greatCount + goodCount + missCount)
+            setBeatmapMaxCombo(greatCount + goodCount + missCount)
+            setDiffModifier(1f)
+            calculateModScoreMultiplier(null)
         }
-        restartButton.isVisible = false
-        showModal()
+
+        // Use the existing ScoringScene (results screen) instead of the placeholder modal.
+        // A new ScoringScene is created with the taiko adapter so the retry button restarts taiko.
+        val adapter = gameAdapter ?: TaikoGameSceneAdapter(this).also { gameAdapter = it }
+        val scoring = scoringScene ?: ScoringScene(
+            global.engine,
+            adapter,
+            global.songMenu
+        ).also { scoringScene = it }
+
+        // Pass beatmapInfo so the results screen shows beatmap info and the retry button appears.
+        // Pass null mapMD5 so beatmap.getMD5().equals(null) is false -> score is NOT saved to database.
+        scoring.load(stat, beatmapInfo, songService, null, null, null)
+        global.engine.scene = scoring.scene
     }
 
     private fun showModal() {
@@ -1363,6 +1402,12 @@ class TaikoGameScene private constructor(
         start(beatmapInfo, mods)
     }
 
+    /** Cancels async beatmap loading, used by GameLoaderScene back button via the adapter. */
+    fun cancelLoading() {
+        loadingJob?.cancel()
+        loadingJob = null
+    }
+
     fun exitToSongMenu() {
         cleanup()
         val songMenu = global.songMenu
@@ -1379,6 +1424,48 @@ class TaikoGameScene private constructor(
         songService.setGaming(false)
         BeatmapSkinManager.setSkinEnabled(false)
         BeatmapSkinManager.getInstance().clearSkin()
+    }
+
+    /**
+     * A thin adapter that lets the existing standard GameLoaderScene and ScoringScene work with
+     * TaikoGameScene without requiring TaikoGameScene to extend GameScene.
+     *
+     * - [start] is called by GameLoaderScene when loading is complete; it switches the engine scene
+     *   to the taiko scene and begins gameplay.
+     * - [cancelLoading] is called by GameLoaderScene when the user presses back; it cancels async loading.
+     * - [startGame] is called by ScoringScene's retry button; it restarts the taiko game.
+     * - [loadStoryboard] and [loadVideo] are no-ops since taiko beta does not support storyboards or video.
+     */
+    inner class TaikoGameSceneAdapter : GameScene(global.engine) {
+        init {
+            // GameLoaderScene accesses gameScene.hud for the transition animation.
+            // A fresh empty GameplayHUD is safe -- it is never attached or updated in taiko mode.
+            hud = GameplayHUD()
+            isReadyToStart = false
+        }
+
+        override fun start() {
+            global.engine.scene = this@TaikoGameScene
+            beginGameplay()
+        }
+
+        override fun cancelLoading(): CompletableFuture<Unit> {
+            this@TaikoGameScene.cancelLoading()
+            return CompletableFuture.completedFuture(Unit)
+        }
+
+        override fun startGame(beatmapInfo: BeatmapInfo?, replayFile: String?, mods: ModHashMap?) {
+            // Called by ScoringScene retry button -- restart the taiko game.
+            restart()
+        }
+
+        override fun loadStoryboard(beatmapInfo: BeatmapInfo?) {
+            // No-op: taiko beta does not support storyboards.
+        }
+
+        override fun loadVideo(beatmapInfo: BeatmapInfo?) {
+            // No-op: taiko beta does not support video backgrounds.
+        }
     }
 
     companion object {
@@ -1421,8 +1508,7 @@ class TaikoGameScene private constructor(
             }
 
             TaikoGameScene(beatmapInfo, mods).also {
-                GlobalManager.getInstance().engine.scene = it
-                it.beginLoading()
+                it.beginLoadingWithLoader()
             }
         }
     }
