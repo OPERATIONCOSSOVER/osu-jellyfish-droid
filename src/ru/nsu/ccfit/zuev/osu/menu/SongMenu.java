@@ -1162,7 +1162,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             });
 
             if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
-                TaikoGameScene.start(beatmapInfo);
+                TaikoGameScene.start(beatmapInfo, ModMenu.INSTANCE.getEnabledMods());
             } else {
                 game.startGame(beatmapInfo, null, ModMenu.INSTANCE.getEnabledMods());
             }

@@ -10,6 +10,7 @@ import com.osudroid.beatmaps.hitobjects.Slider
 import com.osudroid.beatmaps.hitobjects.Spinner
 import com.osudroid.beatmaps.parser.BeatmapParser
 import com.osudroid.data.BeatmapInfo
+import com.osudroid.mods.ModAutoplay
 import com.osudroid.ui.v2.hud.HUDElement
 import com.osudroid.ui.v2.hud.HUDElementSkinData
 import com.osudroid.ui.v2.hud.HUDSkinData
@@ -20,6 +21,7 @@ import com.osudroid.ui.v2.hud.elements.HUDLinearSongProgress
 import com.osudroid.ui.v2.hud.elements.HUDPieSongProgress
 import com.osudroid.ui.v2.hud.elements.HUDScoreCounter
 import com.osudroid.ui.v2.hud.elements.HUDSongProgress
+import com.osudroid.utils.ModHashMap
 import com.osudroid.utils.updateThread
 import com.reco1l.andengine.UIScene
 import com.reco1l.andengine.Anchor
@@ -67,7 +69,10 @@ import kotlin.reflect.KClass
  * Beta scores never enter the osu!droid score/replay database. This keeps existing leaderboard,
  * replay, multiplayer, and performance calculations trustworthy while the ruleset is still evolving.
  */
-class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) : UIScene() {
+class TaikoGameScene private constructor(
+    private val beatmapInfo: BeatmapInfo,
+    private val mods: ModHashMap
+) : UIScene() {
     private enum class ObjectKind {
         Don,
         Kat,
@@ -145,6 +150,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private var missCount = 0
     private var rollHits = 0
     private var health = 0.5f
+    private val isAutoPlay = mods.contains(ModAutoplay::class.java)
 
     init {
         // Keep the selected beatmap background visible below the Taiko lane.
@@ -189,7 +195,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
             y = laneTop - 44f
             font = resources.getFont("middleFont")
             color = Color4.White
-            text = "osu!taiko (BETA)"
+            text = if (isAutoPlay) "Watching osu!taiko (BETA)" else "osu!taiko (BETA)"
         }
 
         box {
@@ -446,7 +452,9 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         }
         hideModal()
 
-        setOnSceneTouchListener { _, event -> handleTouch(event) }
+        if (!isAutoPlay) {
+            setOnSceneTouchListener { _, event -> handleTouch(event) }
+        }
     }
 
     private fun createTaikoHud() {
@@ -603,6 +611,10 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
             updateHud(now, deltaTimeSec)
             updateSkipButton(now)
 
+            if (isAutoPlay) {
+                processAutoPlay(now)
+            }
+
             if (now > lastObjectEndTime + 1800) {
                 finish()
             } else if (songHasStarted && songService.status == Status.STOPPED && now > 0) {
@@ -688,6 +700,97 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
                 }
             }
         }
+    }
+
+    private fun processAutoPlay(now: Double) {
+        // Auto-play Don/Kat notes with perfect timing.
+        for (obj in objects) {
+            if (obj.judged) {
+                continue
+            }
+
+            when (obj.kind) {
+                ObjectKind.Don, ObjectKind.Kat -> {
+                    // Hit the note exactly at its start time (within 1ms tolerance).
+                    if (now >= obj.startTime) {
+                        val isKat = obj.kind == ObjectKind.Kat
+                        autoHitNote(obj, isKat)
+                    }
+                }
+
+                ObjectKind.Drumroll -> {
+                    // For drumrolls, tap every 100ms to simulate active rolling.
+                    if (now in obj.startTime..obj.endTime) {
+                        autoHitRoll(obj, now)
+                    }
+                }
+
+                ObjectKind.Denden -> {
+                    // For denden (spinner), tap every 50ms for higher score.
+                    if (now in obj.startTime..obj.endTime) {
+                        autoHitDenden(obj, now)
+                    }
+                }
+            }
+        }
+    }
+
+    private var lastAutoRollTime = 0.0
+    private var lastAutoDendenTime = 0.0
+
+    private fun autoHitNote(obj: TaikoObject, isKat: Boolean) {
+        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
+        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+
+        val multiplier = if (obj.isBig) 2 else 1
+        greatCount++
+        combo++
+        score += (300L + combo * 12L) * multiplier
+        health = (health + 0.025f * multiplier).coerceAtMost(1f)
+        showJudgement("GREAT", Color4(0xFFFFD54F))
+        maxCombo = max(maxCombo, combo)
+
+        obj.samples.forEach { sample ->
+            com.osudroid.game.GameplayHitSampleInfo.obtain().also {
+                it.init(sample)
+                it.play()
+                it.release()
+            }
+        }
+        expire(obj)
+    }
+
+    private fun autoHitRoll(obj: TaikoObject, now: Double) {
+        // Tap every 100ms during a drumroll.
+        if (now - lastAutoRollTime < 0.1) {
+            return
+        }
+        lastAutoRollTime = now
+
+        rollHits++
+        score += 50
+        health = (health + 0.0025f).coerceAtMost(1f)
+
+        val isKat = obj.kind == ObjectKind.Kat
+        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
+        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        showJudgement("ROLL", Color4(0xFFFFC107))
+    }
+
+    private fun autoHitDenden(obj: TaikoObject, now: Double) {
+        // Tap every 50ms during a denden for higher score.
+        if (now - lastAutoDendenTime < 0.05) {
+            return
+        }
+        lastAutoDendenTime = now
+
+        rollHits++
+        score += 100
+        health = (health + 0.0025f).coerceAtMost(1f)
+
+        inputFlash.color = Color4(0xFFFFC107)
+        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        showJudgement("DEN!", Color4(0xFFFFC107))
     }
 
     private fun createObjectEntity(obj: TaikoObject): UIComponent = when (obj.kind) {
@@ -963,7 +1066,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
 
     private fun restart() {
         cleanup()
-        start(beatmapInfo)
+        start(beatmapInfo, mods)
     }
 
     fun exitToSongMenu() {
@@ -991,13 +1094,14 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         private const val SKIP_TOUCH_RADIUS = 250f
 
         @JvmStatic
-        fun start(beatmapInfo: BeatmapInfo) {
+        @JvmOverloads
+        fun start(beatmapInfo: BeatmapInfo, mods: ModHashMap = ModHashMap()) {
             if (beatmapInfo.beatmapMode != 1) {
                 ToastLogger.showText("This is not a native osu!taiko beatmap.", true)
                 return
             }
 
-            TaikoGameScene(beatmapInfo).also {
+            TaikoGameScene(beatmapInfo, mods).also {
                 GlobalManager.getInstance().engine.scene = it
                 it.beginLoading()
             }
