@@ -1,0 +1,100 @@
+name: Taiko Beta Release
+
+# Push-triggered build-and-publish for the osu!taiko Beta 5 pre-release.
+#
+# This copy lives on the ci/release-taiko-beta.5 branch so that pushing to that branch starts the
+# build. The published release points at the release/taiko-beta.4 commit that the branch was cut
+# from, so the extra CI commit is not what gets released.
+
+on:
+  push:
+    branches: [ ci/release-taiko-beta.5 ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taiko-beta-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Taiko beta APK
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: "20260727-taiko-beta.5"
+      RELEASE_TITLE: "osu!jellyfish 20260727 Taiko Beta 5"
+      RELEASE_TARGET: "795064d837690dc3fce08a467d63be810a832373"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17 and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Assemble pre-release APK
+        run: ./gradlew assemblePre_release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: osu-jellyfish-taiko-beta-5
+          path: build/outputs/apk/pre_release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t apks < <(
+            find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk' -print
+          )
+
+          if (( ${#apks[@]} == 0 )); then
+            echo "No Taiko beta APK was produced." >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<'EOF'
+          ## osu!jellyfish 20260727 Taiko Beta 5
+
+          ### Taiko hitsounds
+
+          - osu!taiko now plays its own hitsound set instead of the osu!standard samples. The
+            eight new banks ship in `assets/sfx`:
+            `taiko-normal-hitnormal`, `taiko-normal-hitwhistle`, `taiko-normal-hitfinish`,
+            `taiko-normal-hitclap`, and the matching `taiko-soft-*` samples.
+          - Sample lookup during taiko gameplay resolves the `taiko-` banks only, with no
+            fallback to `normal-hit*`, `soft-hit*` or `drum-hit*`. Drum and unset banks map to
+            the taiko normal bank, and custom sample bank indices
+            (`taiko-normal-hitnormal2` and friends) still work.
+          - Raw don/kat tap feedback now uses `taiko-normal-hitnormal` and
+            `taiko-normal-hitwhistle`. It previously looked up unregistered sample names and was
+            silent.
+          - The new banks are skinnable: a user skin or beatmap skin containing a file with the
+            same name overrides the bundled sample.
+
+          Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko
+          multiplayer, online leaderboards, replay storage, and score uploads are disabled.
+          EOF
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${apks[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${apks[@]}" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
