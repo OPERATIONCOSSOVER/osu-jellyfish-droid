@@ -39,7 +39,16 @@ class HUDScoreCounter : HUDElement() {
     }
 
     override fun onGameplayUpdate(game: GameScene, secondsElapsed: Float) {
-        counter.targetValue = game.stat.totalScoreWithMultiplier
+        setScore(game.stat.totalScoreWithMultiplier)
+    }
+
+    /**
+     * Updates the displayed score without requiring a legacy [GameScene].
+     *
+     * This keeps the skinnable HUD element reusable by isolated gameplay scenes.
+     */
+    fun setScore(score: Long) {
+        counter.targetValue = score.coerceAtLeast(0L)
     }
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
