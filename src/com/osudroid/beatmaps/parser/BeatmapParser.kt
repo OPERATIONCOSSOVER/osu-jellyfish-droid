@@ -70,7 +70,7 @@ class BeatmapParser {
      * @return A [Beatmap] containing relevant information of the beatmap file.
      * @throws IOException If an I/O error occurs while reading the file.
      * @throws NumberFormatException If the beatmap's file version cannot be determined.
-     * @throws IllegalArgumentException If the beatmap is not an osu!standard beatmap.
+     * @throws IllegalArgumentException If the beatmap is not an osu!standard or osu!taiko beatmap.
      */
     @JvmOverloads
     @Throws(IOException::class, IllegalArgumentException::class, NumberFormatException::class)
@@ -91,10 +91,6 @@ class BeatmapParser {
 
         while (source.readUtf8Line().also { currentLine = it } != null) {
             scope?.ensureActive()
-
-            if (beatmap.general.mode != 0) {
-                throw IllegalArgumentException("Not an osu!standard beatmap")
-            }
 
             var line = currentLine ?: continue
 
@@ -163,6 +159,10 @@ class BeatmapParser {
 
                 Log.e("BeatmapParser.parse", "Unable to parse line", e)
             }
+        }
+
+        if (beatmap.general.mode !in 0..1) {
+            throw IllegalArgumentException("Only osu!standard and osu!taiko beatmaps are supported")
         }
 
         val processor = BeatmapProcessor(beatmap, scope)

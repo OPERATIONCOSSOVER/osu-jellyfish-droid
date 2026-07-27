@@ -329,4 +329,26 @@ class MigrationTest {
             }
         }
     }
+
+    @Test
+    @Throws(IOException::class)
+    fun `Test migration from version 5 to 6`() {
+        helper.createDatabase(testDb, 5).use {
+            it.execSQL(
+                "INSERT INTO BeatmapInfo (filename, md5, audioFilename, setDirectory, title, titleUnicode, artist, " +
+                    "artistUnicode, creator, version, tags, source, dateImported, approachRate, overallDifficulty, " +
+                    "circleSize, hpDrainRate, bpmMax, bpmMin, mostCommonBPM, length, previewTime, hitCircleCount, " +
+                    "sliderCount, spinnerCount, maxCombo, epilepsyWarning) VALUES " +
+                    "('test.osu', 'md5', 'test.mp3', 'set', 'title', 'title', 'artist', 'artist', 'creator', " +
+                    "'version', '', '', 0, 5, 5, 5, 5, 120, 120, 120, 1000, 0, 1, 0, 0, 1, 0)"
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(testDb, 6, true, MIGRATION_5_6)
+
+        db.query("SELECT beatmapMode FROM BeatmapInfo WHERE md5 = 'md5'").use {
+            Assert.assertTrue(it.moveToFirst())
+            Assert.assertEquals(0, it.getInt(0))
+        }
+    }
 }

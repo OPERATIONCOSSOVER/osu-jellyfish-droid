@@ -347,4 +347,15 @@ val MIGRATION_4_5 = object : BackedUpMigration(4, 5) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+/**
+ * Migration from version 5 to 6.
+ *
+ * Stores the native ruleset ID so song select can keep osu!droid and osu!taiko maps isolated.
+ */
+val MIGRATION_5_6 = object : BackedUpMigration(5, 6) {
+    override fun performMigration(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE BeatmapInfo ADD COLUMN beatmapMode INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)

@@ -42,12 +42,14 @@ import com.edlplan.ui.ActivityOverlay;
 import com.google.firebase.analytics.FirebaseAnalytics;
 import com.google.firebase.crashlytics.FirebaseCrashlytics;
 import com.osudroid.BuildSettings;
+import com.osudroid.RulesetMode;
 import com.osudroid.beatmaps.BeatmapCache;
 import com.osudroid.data.DatabaseManager;
 import com.osudroid.debug.DebugPlaygroundScene;
 import com.osudroid.resources.R;
 import com.osudroid.ui.FPSCounter;
 import com.osudroid.ui.v2.GameLoaderScene;
+import com.osudroid.ui.v2.taiko.TaikoGameScene;
 import com.osudroid.utils.Execution;
 import com.reco1l.andengine.UIEngine;
 import com.osudroid.multiplayer.api.LobbyAPI;
@@ -510,7 +512,20 @@ public class MainActivity extends BaseGameActivity implements
             }
         }
 
+        // Version 20260727 originally discarded native osu!taiko difficulties during import. Force a one-time
+        // rescan so existing song folders gain their newly supported Mode:1 entries.
+        if (!Config.getBoolean("taikoLibraryMigrationDone", false)) {
+            var beatmapDirectories = new File(Config.getBeatmapPath()).listFiles(File::isDirectory);
+
+            if (beatmapDirectories != null) {
+                for (var directory : beatmapDirectories) {
+                    forceImportedBeatmaps.add(directory.getName());
+                }
+            }
+        }
+
         LibraryManager.scanDirectory(forceImportedBeatmaps);
+        Config.setBoolean("taikoLibraryMigrationDone", true);
         LibraryManager.loadLibrary();
     }
 
@@ -760,6 +775,8 @@ public class MainActivity extends BaseGameActivity implements
                         // lingering game state.
                         if (scene != null && gameScene != null && scene == gameScene.getScene()) {
                             gameScene.quit();
+                        } else if (scene instanceof TaikoGameScene taikoGameScene) {
+                            taikoGameScene.exitToSongMenu();
                         }
                     }
 
@@ -806,6 +823,8 @@ public class MainActivity extends BaseGameActivity implements
 
         if (gameScene != null && mEngine.getScene() == gameScene.getScene()) {
             mEngine.getTextureManager().reloadTextures();
+        } else if (mEngine.getScene() instanceof TaikoGameScene) {
+            mEngine.getTextureManager().reloadTextures();
         } else {
             var songService = GlobalManager.getInstance().getSongService();
 
@@ -840,6 +859,8 @@ public class MainActivity extends BaseGameActivity implements
             } else {
                 Execution.updateThread(gameScene::pause);
             }
+        } else if (mEngine.getScene() instanceof TaikoGameScene taikoGameScene) {
+            Execution.updateThread(taikoGameScene::pause);
         }
 
         if (songService != null) {
@@ -886,6 +907,8 @@ public class MainActivity extends BaseGameActivity implements
 
             if (gameScene != null && getEngine().getScene() == gameScene.getScene() && !gameScene.isPaused() && !Multiplayer.isMultiplayer) {
                 Execution.updateThread(gameScene::pause);
+            } else if (getEngine().getScene() instanceof TaikoGameScene taikoGameScene) {
+                Execution.updateThread(taikoGameScene::pause);
             }
 
             if (Multiplayer.isConnected()
@@ -994,6 +1017,12 @@ public class MainActivity extends BaseGameActivity implements
             return true;
         }
 
+        if (currentScene instanceof TaikoGameScene taikoGameScene &&
+                (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU)) {
+            Execution.updateThread(taikoGameScene::togglePause);
+            return true;
+        }
+
         var scoringScene = GlobalManager.getInstance().getScoring();
 
         if (scoringScene != null && keyCode == KeyEvent.KEYCODE_BACK && currentScene == scoringScene.getScene()) {
@@ -1002,6 +1031,12 @@ public class MainActivity extends BaseGameActivity implements
         }
 
         var songMenu = GlobalManager.getInstance().getSongMenu();
+
+        if (songMenu != null && currentScene == songMenu.getScene() && event.isCtrlPressed() &&
+                (keyCode == KeyEvent.KEYCODE_1 || keyCode == KeyEvent.KEYCODE_2)) {
+            songMenu.setRulesetMode(keyCode == KeyEvent.KEYCODE_1 ? RulesetMode.Droid : RulesetMode.Taiko);
+            return true;
+        }
 
         if ((keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ENTER)
                 && songMenu != null && currentScene == songMenu.getScene() && songMenu.getScene().hasChildScene()) {
@@ -1081,6 +1116,8 @@ public class MainActivity extends BaseGameActivity implements
     public void forcedExit() {
         if (GlobalManager.getInstance().getEngine().getScene() == GlobalManager.getInstance().getGameScene().getScene()) {
             GlobalManager.getInstance().getGameScene().quit();
+        } else if (GlobalManager.getInstance().getEngine().getScene() instanceof TaikoGameScene taikoGameScene) {
+            taikoGameScene.exitToSongMenu();
         }
         GlobalManager.getInstance().getEngine().setScene(GlobalManager.getInstance().getMainScene().getScene());
         GlobalManager.getInstance().getMainScene().exit();
