@@ -1,0 +1,97 @@
+name: Taiko Beta 6 Release
+
+on:
+  push:
+    branches:
+      - ci/release-taiko-beta.6
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taiko-beta-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: "20260727-taiko-beta.6"
+      RELEASE_TITLE: "osu!jellyfish 20260727 Taiko Beta 6"
+      RELEASE_TARGET: "35e0d4d45330e8dec03ffae7325e0cdd8610133e"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Java and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Assemble pre-release APK
+        run: ./gradlew assemblePre_release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: osu-jellyfish-taiko-beta-6
+          path: build/outputs/apk/pre_release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t APKS < <(find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk')
+
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "No APK was produced by assemblePre_release" >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<'NOTES'
+          ## osu!jellyfish 20260727 Taiko Beta 6
+
+          ### Taiko hitsound accuracy
+
+          Follows the osu! wiki taiko sample sets and hitsound conventions.
+
+          - **Kats no longer play a don underneath them.** Every osu! hit object carries a
+            `hitnormal` sample with whistle, clap and finish layered on top as additions. In
+            osu!taiko the addition identifies the note instead of decorating it, so the base
+            sample is now dropped for kats. Blue notes previously fired `taiko-*-hitnormal` and
+            `taiko-*-hitwhistle` together, which buried the kat under a don.
+          - Finishers always pass through, so big notes keep their weight: a big kat plays the
+            whistle plus the finisher, a big don the normal plus the finisher.
+          - Player input and autoplay now share one sample path, so both sound identical.
+          - **Bank resolution follows the beatmap's sample set.** Normal uses
+            `taiko-normal-hit*`, soft uses `taiko-soft-hit*`, and the drum bank keeps the regular
+            osu!standard `drum-hit*` samples instead of being silently rewritten to another bank.
+            Maps with no declared bank use the taiko normal bank.
+          - **Raw don/kat tap feedback follows the active bank** rather than always using the
+            taiko normal bank, so soft-hitsounded sections give soft feedback.
+          - Custom sample bank indices (`taiko-normal-hitnormal2` and friends) still resolve
+            first, and the taiko banks remain fully skinnable: a user skin or beatmap skin
+            containing a file with the same name overrides the bundled sample.
+
+          Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko
+          multiplayer, online leaderboards, replay storage, and score uploads are disabled.
+          NOTES
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${APKS[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${APKS[@]}" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
