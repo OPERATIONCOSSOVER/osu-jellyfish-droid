@@ -37,6 +37,14 @@ jobs:
     - name: Assemble pre-release APK
       run: ./gradlew assemblePre_release
 
+    - name: Upload Taiko beta APK
+      uses: actions/upload-artifact@v7
+      with:
+        name: osu-jellyfish-taiko-beta-${{ github.sha }}
+        path: build/outputs/apk/pre_release/*.apk
+        if-no-files-found: error
+        retention-days: 30
+
   assemble-release:
     name: Assemble Release APK
     runs-on: ubuntu-latest
