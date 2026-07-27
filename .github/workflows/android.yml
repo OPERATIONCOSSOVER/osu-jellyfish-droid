@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   assemble-debug:
     name: Assemble Debug APK
@@ -44,6 +47,55 @@ jobs:
         path: build/outputs/apk/pre_release/*.apk
         if-no-files-found: error
         retention-days: 30
+
+    - name: Publish Taiko beta GitHub pre-release
+      if: >-
+        github.event.pull_request.head.ref == 'agent/taiko-beta' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: 20260727-taiko-beta.1
+        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 1
+        RELEASE_TARGET: ${{ github.event.pull_request.head.sha }}
+      run: |
+        mapfile -t apks < <(
+          find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk' -print
+        )
+
+        if (( ${#apks[@]} == 0 )); then
+          echo "No Taiko beta APK was produced." >&2
+          exit 1
+        fi
+
+        cat > release-notes.md <<'EOF'
+        ## osu!jellyfish 20260727 Taiko Beta 1
+
+        This experimental release adds native **osu!taiko** gameplay.
+
+        - Detects native Taiko beatmaps from `[General] Mode: 1`.
+        - Adds an **osu!taiko (BETA)** ruleset selector in song select.
+        - Supports Don, Kat, big notes, drumrolls, denden, scoring, combo, and accuracy.
+        - Rescans existing song folders once after upgrading so previously ignored Taiko maps appear.
+
+        Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko multiplayer,
+        online leaderboards, replay storage, and score uploads are disabled.
+        EOF
+
+        if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          gh release upload "$RELEASE_TAG" "${apks[@]}" --clobber
+          gh release edit "$RELEASE_TAG" \
+            --target "$RELEASE_TARGET" \
+            --title "$RELEASE_TITLE" \
+            --notes-file release-notes.md \
+            --prerelease
+        else
+          gh release create "$RELEASE_TAG" "${apks[@]}" \
+            --target "$RELEASE_TARGET" \
+            --title "$RELEASE_TITLE" \
+            --notes-file release-notes.md \
+            --prerelease
+        fi
 
   assemble-release:
     name: Assemble Release APK
