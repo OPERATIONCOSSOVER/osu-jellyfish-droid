@@ -1,0 +1,93 @@
+name: Taiko Beta 7 Release
+
+on:
+  push:
+    branches:
+      - ci/release-taiko-beta.7
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taiko-beta-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: 20260727-taiko-beta.7
+  RELEASE_TITLE: osu!jellyfish Taiko Beta 7
+  RELEASE_TARGET: 97d84d5fed7dc1de899cd3e1e5881e8d394cd6d7
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the release commit
+        uses: actions/checkout@v6
+        with:
+          ref: 97d84d5fed7dc1de899cd3e1e5881e8d394cd6d7
+          submodules: recursive
+
+      - name: Set up Java and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Build the pre_release APK
+        run: ./gradlew assemblePre_release
+
+      - name: Upload the APK as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: osu-jellyfish-taiko-beta-7
+          path: build/outputs/apk/pre_release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t APKS < <(find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk')
+
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "No APK was produced by the build." >&2
+            exit 1
+          fi
+
+          printf 'Publishing %s\n' "${APKS[@]}"
+
+          cat > release-notes.md <<'NOTES'
+          ## osu!jellyfish Taiko Beta 7
+
+          ### Fixed
+
+          - Taiko note sounds are now derived from the note type instead of being layered on top of the beatmap's own samples:
+            - **don** plays `hitnormal`
+            - **kat** plays `hitclap`
+            - **big don** plays `hitnormal` + `hitfinish`
+            - **big kat** plays `hitwhistle` + `hitfinish`
+          - Samples are rebuilt from the note's own bank sample, so the sample bank (normal/soft), custom sample index and per-note volume all carry over.
+          - Tap feedback for kats now uses `hitclap` to match the note that was hit.
+
+          ### Notes
+
+          - Drum-bank notes keep using the standard osu! `drum-hit*` sounds.
+          - The bundled `taiko-normal-*` and `taiko-soft-*` sounds live in `assets/sfx` and can be overridden by a skin.
+          NOTES
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${APKS[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${APKS[@]}" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
