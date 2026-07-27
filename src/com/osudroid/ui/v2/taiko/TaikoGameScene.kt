@@ -27,6 +27,8 @@ import com.reco1l.andengine.box
 import com.reco1l.andengine.circle
 import com.reco1l.andengine.component.UIComponent
 import com.reco1l.andengine.component.UIComponent.Companion.FillParent
+import com.reco1l.andengine.component.transformedHeight
+import com.reco1l.andengine.component.transformedWidth
 import com.reco1l.andengine.container
 import com.reco1l.andengine.container.UIContainer
 import com.reco1l.andengine.shape.PaintStyle
@@ -112,7 +114,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private lateinit var inputFlash: UICircle
     private lateinit var songIntro: UIContainer
     private val judgementText: UIText
-    private val loadingText: UIText
+    private lateinit var loadingText: UIText
     private val modal: UIContainer
     private lateinit var modalTitle: UIText
     private lateinit var primaryButton: UITextButton
@@ -128,7 +130,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private var judgementTimeRemaining = 0f
     private var inputFlashTimeRemaining = 0f
     private var introShownAt = System.currentTimeMillis()
-    private var isLoaded = false
+    private var isBeatmapLoaded = false
     private var songHasStarted = false
     private var leadInRemaining = 0.0
     private var firstObjectStartTime = 0.0
@@ -538,7 +540,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
                     leadInRemaining = parsed.general.audioLeadIn.toDouble().coerceAtLeast(0.0)
                     skipButton.isVisible = calculatedSkipTarget > 1000.0
                     loadingText.text = "Ready"
-                    isLoaded = true
+                    isBeatmapLoaded = true
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) {
@@ -576,7 +578,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
         if (
-            isLoaded &&
+            isBeatmapLoaded &&
             !isReady &&
             !isFinished &&
             System.currentTimeMillis() - introShownAt >= SONG_INTRO_DURATION_MS
