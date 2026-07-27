@@ -3,4 +3,12 @@
 <!-- This file here is for new strings that will be temporary:-->
 <!-- Link to localizations pack: https://github.com/osudroid/language-pack-->
 
+    <string name="opt_category_background">Background</string>
+    <string name="opt_seasonal_backgrounds_title">Seasonal backgrounds</string>
+    <string name="opt_seasonal_backgrounds_summary">Use an image from the SeasonalBackgrounds folder as the menu background</string>
+    <string name="opt_seasonal_backgrounds_slideshow_title">Slideshow</string>
+    <string name="opt_seasonal_backgrounds_slideshow_summary">Cycle through the images in the folder, crossfading between them</string>
+    <string name="opt_seasonal_backgrounds_interval_title">Slideshow interval</string>
+    <string name="opt_seasonal_backgrounds_interval_summary">Seconds each image stays on screen before fading to the next</string>
+
 </resources>

@@ -29,7 +29,7 @@ import ru.nsu.ccfit.zuev.osu.scoring.Replay
 /**
  * The current schema version of [DroidDatabase].
  */
-const val DATABASE_VERSION = 5
+const val DATABASE_VERSION = 6
 
 /**
  * The osu!droid database manager.

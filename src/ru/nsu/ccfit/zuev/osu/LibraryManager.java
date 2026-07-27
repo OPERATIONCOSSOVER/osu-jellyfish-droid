@@ -6,6 +6,7 @@ import android.util.Log;
 
 import com.osudroid.beatmaps.BeatmapCache;
 import com.osudroid.beatmaps.DifficultyCalculationManager;
+import com.osudroid.RulesetMode;
 import com.osudroid.data.BeatmapSetInfo;
 import com.osudroid.data.DatabaseManager;
 import com.osudroid.beatmaps.parser.BeatmapParser;
@@ -170,48 +171,83 @@ public class LibraryManager {
         return library;
     }
 
+    /**
+     * Returns a ruleset-filtered view of the library for song select.
+     *
+     * Keeping the complete library in memory is important for replay lookup and database maintenance, while
+     * exposing filtered beatmap sets prevents scores and gameplay paths from crossing rulesets.
+     */
+    public static List<BeatmapSetInfo> getActiveLibrary() {
+        return getLibraryForRuleset(Config.getRulesetMode());
+    }
+
+    public static List<BeatmapSetInfo> getLibraryForRuleset(RulesetMode rulesetMode) {
+        var filteredLibrary = new ArrayList<BeatmapSetInfo>();
+
+        for (var beatmapSet : library) {
+            var filteredBeatmaps = new ArrayList<BeatmapInfo>();
+
+            for (var beatmap : beatmapSet.getBeatmaps()) {
+                if (beatmap.getBeatmapMode() == rulesetMode.beatmapMode) {
+                    filteredBeatmaps.add(beatmap);
+                }
+            }
+
+            if (!filteredBeatmaps.isEmpty()) {
+                filteredLibrary.add(new BeatmapSetInfo(beatmapSet.getId(), beatmapSet.getDirectory(), filteredBeatmaps));
+            }
+        }
+
+        return filteredLibrary;
+    }
+
     public static void shuffleLibrary() {
         Collections.shuffle(library);
         currentIndex = 0;
     }
 
     public static int getSizeOfBeatmaps() {
-        return library.size();
+        return getActiveLibrary().size();
     }
 
 
     public static BeatmapSetInfo getCurrentBeatmapSet() {
-        return library.get(currentIndex);
+        var activeLibrary = getActiveLibrary();
+        currentIndex = activeLibrary.isEmpty() ? 0 : currentIndex % activeLibrary.size();
+        return activeLibrary.get(currentIndex);
     }
 
     public static BeatmapSetInfo selectNextBeatmapSet() {
+        var activeLibrary = getActiveLibrary();
 
-        if (library.isEmpty()) {
+        if (activeLibrary.isEmpty()) {
             currentIndex = 0;
             return null;
         }
 
-        currentIndex = ++currentIndex % library.size();
-        return library.get(currentIndex);
+        currentIndex = ++currentIndex % activeLibrary.size();
+        return activeLibrary.get(currentIndex);
     }
 
     public static BeatmapSetInfo selectPreviousBeatmapSet() {
+        var activeLibrary = getActiveLibrary();
 
-        if (library.isEmpty()) {
+        if (activeLibrary.isEmpty()) {
             currentIndex = 0;
             return null;
         }
 
-        currentIndex = currentIndex == 0 ? library.size() - 1 : --currentIndex;
-        return library.get(currentIndex);
+        currentIndex = currentIndex == 0 ? activeLibrary.size() - 1 : --currentIndex;
+        return activeLibrary.get(currentIndex);
     }
 
 
     public static void findBeatmapSetIndex(BeatmapInfo info) {
+        var activeLibrary = getActiveLibrary();
 
-        for (int i = 0; i < library.size(); i++) {
+        for (int i = 0; i < activeLibrary.size(); i++) {
 
-            if (library.get(i).getDirectory().equals(info.getSetDirectory())) {
+            if (activeLibrary.get(i).getDirectory().equals(info.getSetDirectory())) {
                 currentIndex = i;
                 return;
             }

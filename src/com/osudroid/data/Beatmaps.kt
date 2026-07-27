@@ -211,6 +211,12 @@ data class BeatmapInfo(
      */
     var epilepsyWarning: Boolean,
 
+    /**
+     * The native osu! ruleset ID declared by the beatmap (`0` = osu!, `1` = osu!taiko).
+     */
+    @ColumnInfo(defaultValue = "0")
+    var beatmapMode: Int = 0,
+
 ) {
 
     /**
@@ -261,7 +267,7 @@ data class BeatmapInfo(
      * Whether the beatmap needs a difficulty calculation.
      */
     val needsDifficultyCalculation
-        get() = droidStarRating == null || standardStarRating == null
+        get() = beatmapMode == 0 && (droidStarRating == null || standardStarRating == null)
 
     /**
      * The full name of the beatmapset containing this beatmap without taking romanization into account.
@@ -342,6 +348,7 @@ data class BeatmapInfo(
         sliderCount = b.sliderCount
         spinnerCount = b.spinnerCount
         maxCombo = b.maxCombo
+        beatmapMode = b.beatmapMode
     }
 
     @JvmOverloads
@@ -368,6 +375,7 @@ data class BeatmapInfo(
         spinnerCount = beatmap.hitObjects.spinnerCount
         maxCombo = beatmap.maxCombo
         epilepsyWarning = beatmap.general.epilepsyWarning
+        beatmapMode = beatmap.general.mode
 
         var bpmMin = Float.MAX_VALUE
         var bpmMax = 0f
@@ -427,7 +435,11 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
     var droidStarRating: Float? = null
     var standardStarRating: Float? = null
 
-    if (calculateDifficulty) {
+    if (data.general.mode == 1) {
+        // osu!standard difficulty calculators do not describe native osu!taiko maps.
+        droidStarRating = 0f
+        standardStarRating = 0f
+    } else if (calculateDifficulty) {
         try {
             val droidAttributes = BeatmapDifficultyCalculator.calculateDroidDifficulty(data, scope = scope)
             val standardAttributes = BeatmapDifficultyCalculator.calculateStandardDifficulty(data, scope = scope)
@@ -491,7 +503,8 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
         sliderCount = data.hitObjects.sliderCount,
         spinnerCount = data.hitObjects.spinnerCount,
         maxCombo = data.maxCombo,
-        epilepsyWarning = data.general.epilepsyWarning
+        epilepsyWarning = data.general.epilepsyWarning,
+        beatmapMode = data.general.mode
     )
 
     beatmapInfo.apply(data, scope)
@@ -532,5 +545,4 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
     @Query("DELETE FROM BeatmapInfo")
     fun deleteAll()
 }
-
 

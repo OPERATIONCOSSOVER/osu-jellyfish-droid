@@ -1,0 +1,36 @@
+osu file format v14
+
+[General]
+AudioFilename: test.mp3
+PreviewTime: 0
+Mode: 1
+
+[Metadata]
+Title:Taiko Beta
+TitleUnicode:Taiko Beta
+Artist:osu!jellyfish
+ArtistUnicode:osu!jellyfish
+Creator:Codex
+Version:Beta
+Source:
+Tags:taiko beta
+BeatmapID:-1
+BeatmapSetID:-1
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:5
+OverallDifficulty:5
+ApproachRate:5
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[TimingPoints]
+0,500,4,1,0,100,1,0
+
+[HitObjects]
+256,192,1000,1,0,0:0:0:0:
+256,192,1500,1,8,0:0:0:0:
+256,192,2000,1,4,0:0:0:0:
+256,192,2500,2,0,L|356:192,1,140
+256,192,3500,8,0,4500

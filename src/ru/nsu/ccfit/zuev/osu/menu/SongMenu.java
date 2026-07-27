@@ -26,7 +26,10 @@ import com.reco1l.andengine.sprite.UISprite;
 import com.osudroid.multiplayer.Multiplayer;
 
 import com.osudroid.ui.v2.modmenu.ModMenu;
+import com.osudroid.ui.v2.RulesetModeButton;
+import com.osudroid.ui.v2.taiko.TaikoGameScene;
 import com.osudroid.GameMode;
+import com.osudroid.RulesetMode;
 import com.osudroid.difficulty.BeatmapDifficultyCalculator;
 import com.osudroid.math.Precision;
 import com.osudroid.mods.LegacyModConverter;
@@ -131,6 +134,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
     private Scene.ITouchArea currentPressedButton;
     private UISprite scoringSwitcher = null;
+    private RulesetModeButton rulesetModeButton;
     private SearchBarFragment searchBar = null;
     private GroupType groupType = GroupType.MapSet;
 
@@ -224,7 +228,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         board = new ScoreBoard(scene, backLayer, this);
 
 //        float oy = 10;
-        for (final BeatmapSetInfo i : LibraryManager.getLibrary()) {
+        for (final BeatmapSetInfo i : LibraryManager.getActiveLibrary()) {
             final BeatmapSetItem item = new BeatmapSetItem(this, i);
             items.add(item);
             item.attachToScene(scene, backLayer);
@@ -682,6 +686,13 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         frontLayer.attachChild(randomMap);
         scene.registerTouchArea(randomMap);
 
+        rulesetModeButton = new RulesetModeButton(this::toggleRulesetMode);
+        rulesetModeButton.setPosition(
+            Config.getRES_WIDTH() - rulesetModeButton.getWidth() - 24,
+            Config.getRES_HEIGHT() - rulesetModeButton.getHeight() - paddingBottom - 24
+        );
+        frontLayer.attachChild(rulesetModeButton);
+
         if (OnlineScoring.getInstance().createSecondPanel() != null) {
             OnlinePanel panel = OnlineScoring.getInstance().getSecondPanel();
             panel.detachSelf();
@@ -713,6 +724,11 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     public void toggleScoringSwitcher() {
+        if (Config.getRulesetMode() == RulesetMode.Taiko) {
+            ToastLogger.showText("Online leaderboards are disabled in osu!taiko (BETA).", false);
+            return;
+        }
+
         if (board.isShowOnlineScores()) {
             switch (Config.getBeatmapLeaderboardScoringMode()) {
                 case SCORE -> Config.setBeatmapLeaderboardScoringMode(BeatmapLeaderboardScoringMode.PP);
@@ -736,6 +752,27 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
     public void show() {
         engine.setScene(scene);
+    }
+
+    public void toggleRulesetMode() {
+        setRulesetMode(Config.getRulesetMode().next());
+    }
+
+    public void setRulesetMode(RulesetMode rulesetMode) {
+        if (Multiplayer.isMultiplayer && rulesetMode == RulesetMode.Taiko) {
+            ToastLogger.showText("osu!taiko (BETA) is not available in multiplayer yet.", true);
+            return;
+        }
+
+        if (Config.getRulesetMode() == rulesetMode) {
+            return;
+        }
+
+        Config.setRulesetMode(rulesetMode);
+        GlobalManager.getInstance().setSelectedBeatmap(null);
+        stopMusic();
+        reload();
+        show();
     }
 
     public void setFilter(final String filter, final SortOrder order,
@@ -1039,6 +1076,15 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         setStarsDisplay(beatmapInfo.getStarRating());
         cancelCalculationJobs();
 
+        if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
+            beatmapDifficultyText.setText(
+                "OD: " + beatmapInfo.getOverallDifficulty() +
+                "  HP: " + beatmapInfo.getHpDrainRate() +
+                "  Native osu!taiko • BETA"
+            );
+            return;
+        }
+
         calculationJob = Execution.async(scope -> {
             try {
                 var mode = switch (Config.getDifficultyAlgorithm()) {
@@ -1097,6 +1143,11 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
             if (Multiplayer.isMultiplayer)
             {
+                if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
+                    ToastLogger.showText("osu!taiko (BETA) is not available in multiplayer yet.", true);
+                    return;
+                }
+
                 setMultiplayerRoomBeatmap(selectedBeatmap);
                 back(false);
                 return;
@@ -1110,7 +1161,11 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
                 }
             });
 
-            game.startGame(beatmapInfo, null, ModMenu.INSTANCE.getEnabledMods());
+            if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
+                TaikoGameScene.start(beatmapInfo, ModMenu.INSTANCE.getEnabledMods());
+            } else {
+                game.startGame(beatmapInfo, null, ModMenu.INSTANCE.getEnabledMods());
+            }
             return;
         }
         selectedBeatmap = beatmapInfo;
@@ -1119,7 +1174,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         cancelMapStatusLoadingJob();
         updateInfo(beatmapInfo);
         updateScoringSwitcherStatus(false);
-        board.init(beatmapInfo);
+        board.init(beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode ? null : beatmapInfo);
 
         if (!reloadBG && (beatmapInfo.getBackgroundFilename() == null || backgroundPath.equals(beatmapInfo.getBackgroundPath()))) {
             return;
@@ -1567,7 +1622,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             items.clear();
             switch (type) {
                 case MapSet:
-                    for (final BeatmapSetInfo i : LibraryManager.getLibrary()) {
+                    for (final BeatmapSetInfo i : LibraryManager.getActiveLibrary()) {
                         final BeatmapSetItem item = new BeatmapSetItem(this, i);
                         items.add(item);
                         item.attachToScene(scene, backLayer);
@@ -1575,7 +1630,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
                     }
                     break;
                 case SingleDiff:
-                    for (final BeatmapSetInfo i : LibraryManager.getLibrary()) {
+                    for (final BeatmapSetInfo i : LibraryManager.getActiveLibrary()) {
                         for (int j = 0; j < i.getCount(); j++) {
                             final BeatmapSetItem item = new BeatmapSetItem(this, i, j);
                             items.add(item);
@@ -1652,7 +1707,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             return;
         }
 
-        if (selectedBeatmap == null || !board.isShowOnlineScores()) {
+        if (Config.getRulesetMode() == RulesetMode.Taiko || selectedBeatmap == null || !board.isShowOnlineScores()) {
             scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTextureIfLoaded("ranking_disabled"));
             return;
         }

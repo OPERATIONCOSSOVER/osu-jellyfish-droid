@@ -16,6 +16,7 @@ import androidx.preference.PreferenceManager
 import com.edlplan.framework.easing.Easing
 import com.edlplan.framework.support.util.Updater
 import com.osudroid.resources.R.*
+import com.osudroid.RulesetMode
 import com.edlplan.ui.BaseAnimationListener
 import com.edlplan.ui.EasingHelper
 import com.osudroid.utils.mainThread
@@ -196,6 +197,8 @@ class SearchBarFragment : BaseFragment(), IFilterMenu {
             updateFavFolderText()
 
             val difficultyAlgorithmButton = findViewById<Button>(R.id.algorithm_button)!!
+            difficultyAlgorithmButton.visibility =
+                if (Config.getRulesetMode() == RulesetMode.Taiko) View.GONE else View.VISIBLE
 
             difficultyAlgorithmButton.setOnClickListener {
 

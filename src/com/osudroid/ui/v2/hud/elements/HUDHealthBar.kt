@@ -95,7 +95,14 @@ class HUDHealthBar : HUDElement() {
 
 
     override fun onGameplayUpdate(game: GameScene, secondsElapsed: Float) {
-        val hp = game.stat.hp
+        setHealth(game.stat.hp, secondsElapsed)
+    }
+
+    /**
+     * Updates the displayed health without requiring a legacy [GameScene].
+     */
+    fun setHealth(value: Float, secondsElapsed: Float) {
+        val hp = value.coerceIn(0f, 1f)
 
         fillClear.width = Interpolation.floatAt(secondsElapsed.coerceIn(0f, 0.2f), fillClear.width, (1f - hp) * fill.width, 0f, 0.2f, Easing.OutQuint)
 

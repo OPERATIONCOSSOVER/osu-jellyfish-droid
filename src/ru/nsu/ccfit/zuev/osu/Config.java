@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import com.osudroid.RulesetMode;
 import com.osudroid.multiplayer.Multiplayer;
 import com.reco1l.framework.Color4;
 import com.reco1l.framework.HexComposition;
@@ -809,6 +810,14 @@ public class Config {
 
     public static boolean isHighPrecisionInput() {
         return getBoolean("highPrecisionInput", false);
+    }
+
+    public static RulesetMode getRulesetMode() {
+        return RulesetMode.fromBeatmapMode(getInt("rulesetMode", RulesetMode.Droid.beatmapMode));
+    }
+
+    public static void setRulesetMode(RulesetMode mode) {
+        setInt("rulesetMode", mode.beatmapMode);
     }
 
     // Shared Preferences

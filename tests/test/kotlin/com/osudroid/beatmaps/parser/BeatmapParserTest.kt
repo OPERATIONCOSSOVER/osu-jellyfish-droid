@@ -22,6 +22,26 @@ class BeatmapParserTest {
     }
 
     @Test
+    fun `Test native taiko beatmap parsing`() {
+        Assert.assertEquals(1, taikoBeatmap.general.mode)
+        Assert.assertEquals(5, taikoBeatmap.hitObjects.objects.size)
+
+        val don = taikoBeatmap.hitObjects.objects[0] as HitCircle
+        val kat = taikoBeatmap.hitObjects.objects[1] as HitCircle
+        val bigDon = taikoBeatmap.hitObjects.objects[2] as HitCircle
+
+        Assert.assertTrue(don.samples.filterIsInstance<BankHitSampleInfo>().any {
+            it.name == BankHitSampleInfo.HIT_NORMAL
+        })
+        Assert.assertTrue(kat.samples.filterIsInstance<BankHitSampleInfo>().any {
+            it.name == BankHitSampleInfo.HIT_WHISTLE || it.name == BankHitSampleInfo.HIT_CLAP
+        })
+        Assert.assertTrue(bigDon.samples.filterIsInstance<BankHitSampleInfo>().any {
+            it.name == BankHitSampleInfo.HIT_FINISH
+        })
+    }
+
+    @Test
     fun `Test version 3 beatmap colors section`() {
         Assert.assertTrue(v3Beatmap.colors.comboColors.isEmpty())
     }
@@ -336,6 +356,7 @@ class BeatmapParserTest {
         private lateinit var v14Beatmap: Beatmap
         private lateinit var nanBeatmap: Beatmap
         private lateinit var outOfRangeDifficultyBeatmap: Beatmap
+        private lateinit var taikoBeatmap: Beatmap
 
         @BeforeClass
         @JvmStatic
@@ -356,6 +377,9 @@ class BeatmapParserTest {
 
             outOfRangeDifficultyBeatmap =
                 BeatmapParser(TestResourceManager.getBeatmapFile("out-of-range-difficulty")!!).parse(true)
+
+            taikoBeatmap =
+                BeatmapParser(TestResourceManager.getBeatmapFile("taiko-beta")!!).parse(true)
         }
     }
 }
