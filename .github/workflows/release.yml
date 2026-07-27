@@ -1,0 +1,65 @@
+name: Release Android
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish APK
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'Release osu!jellyfish 20260727')
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: "20260727"
+      RELEASE_TITLE: "osu!jellyfish 20260727"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17 and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Assemble release APK
+        run: ./gradlew assembleRelease
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t apks < <(
+            find build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
+          )
+
+          if (( ${#apks[@]} == 0 )); then
+            echo "No release APK was produced." >&2
+            exit 1
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${apks[@]}" --clobber
+            exit 0
+          fi
+
+          cat > release-notes.md <<'EOF'
+          ## osu!jellyfish 20260727
+
+          - Renamed the Android game to **osu!jellyfish**.
+          - Set the displayed release version to **20260727**.
+          - Updated the main-menu version badge and About dialog.
+          - Renamed generated APK files with the `osu-jellyfish` prefix.
+
+          Existing package identifiers and osu!droid data directories remain unchanged for compatibility.
+          EOF
+
+          gh release create "$RELEASE_TAG" "${apks[@]}" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes-file release-notes.md
