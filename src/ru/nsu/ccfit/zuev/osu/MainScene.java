@@ -188,7 +188,7 @@ public class MainScene implements IUpdateHandler {
         UIBox box = new UIBox() {
 
             {
-                Text versionText = new Text(10f, 2f, ResourceManager.getInstance().getFont("smallFont"), "osu!droid " + BuildConfig.VERSION_NAME);
+                Text versionText = new Text(10f, 2f, ResourceManager.getInstance().getFont("smallFont"), "osu!jellyfish " + BuildConfig.VERSION_NAME);
                 attachChild(versionText);
 
                 setSize(versionText.getWidth() + 20f, versionText.getHeight() + 4f);
@@ -202,9 +202,9 @@ public class MainScene implements IUpdateHandler {
                     new HorizontalMessageDialog()
                         .setTitle("About")
                         .setMessage(
-                                "<h1>osu!droid</h1>\n" +
+                                "<h1>osu!jellyfish</h1>\n" +
                                 "<h5>Version " + BuildConfig.VERSION_NAME + "</h5>\n" +
-                                "<p>Made by osu!droid team<br>osu! is © peppy 2007-2026</p>\n" +
+                                "<p>osu!jellyfish, based on osu!droid<br>osu! is © peppy 2007-2026</p>\n" +
                                 "<br>\n" +
                                 "<a href=\"https://osu.ppy.sh\">Visit official osu! website ↗</a>\n" +
                                 "<br>\n" +
