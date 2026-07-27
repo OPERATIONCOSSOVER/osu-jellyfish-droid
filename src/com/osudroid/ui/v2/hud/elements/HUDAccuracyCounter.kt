@@ -59,7 +59,14 @@ class HUDAccuracyCounter : HUDElement() {
     }
 
     override fun onGameplayUpdate(gameScene: GameScene, secondsElapsed: Float) {
-        counter.targetValue = gameScene.stat.accuracy
+        setAccuracy(gameScene.stat.accuracy)
+    }
+
+    /**
+     * Updates the displayed accuracy without requiring a legacy [GameScene].
+     */
+    fun setAccuracy(accuracy: Float) {
+        counter.targetValue = accuracy.coerceIn(0f, 1f)
     }
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
