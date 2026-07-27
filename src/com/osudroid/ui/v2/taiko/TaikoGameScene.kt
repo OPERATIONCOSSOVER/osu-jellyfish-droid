@@ -2,7 +2,6 @@ package com.osudroid.ui.v2.taiko
 
 import android.util.Log
 import com.osudroid.GameMode
-import com.osudroid.beatmaps.Beatmap
 import com.osudroid.beatmaps.hitobjects.BankHitSampleInfo
 import com.osudroid.beatmaps.hitobjects.HitCircle
 import com.osudroid.beatmaps.hitobjects.HitObject
@@ -11,6 +10,16 @@ import com.osudroid.beatmaps.hitobjects.Slider
 import com.osudroid.beatmaps.hitobjects.Spinner
 import com.osudroid.beatmaps.parser.BeatmapParser
 import com.osudroid.data.BeatmapInfo
+import com.osudroid.ui.v2.hud.HUDElement
+import com.osudroid.ui.v2.hud.HUDElementSkinData
+import com.osudroid.ui.v2.hud.HUDSkinData
+import com.osudroid.ui.v2.hud.elements.HUDAccuracyCounter
+import com.osudroid.ui.v2.hud.elements.HUDComboCounter
+import com.osudroid.ui.v2.hud.elements.HUDHealthBar
+import com.osudroid.ui.v2.hud.elements.HUDLinearSongProgress
+import com.osudroid.ui.v2.hud.elements.HUDPieSongProgress
+import com.osudroid.ui.v2.hud.elements.HUDScoreCounter
+import com.osudroid.ui.v2.hud.elements.HUDSongProgress
 import com.osudroid.utils.updateThread
 import com.reco1l.andengine.UIScene
 import com.reco1l.andengine.Anchor
@@ -22,8 +31,10 @@ import com.reco1l.andengine.container
 import com.reco1l.andengine.container.UIContainer
 import com.reco1l.andengine.shape.PaintStyle
 import com.reco1l.andengine.shape.UIBox
+import com.reco1l.andengine.shape.UICircle
 import com.reco1l.andengine.sprite
 import com.reco1l.andengine.sprite.ScaleType
+import com.reco1l.andengine.sprite.UIAnimatedSprite
 import com.reco1l.andengine.text
 import com.reco1l.andengine.text.UIText
 import com.reco1l.andengine.textButton
@@ -42,9 +53,11 @@ import ru.nsu.ccfit.zuev.osu.GlobalManager
 import ru.nsu.ccfit.zuev.osu.ResourceManager
 import ru.nsu.ccfit.zuev.osu.ToastLogger
 import ru.nsu.ccfit.zuev.skins.BeatmapSkinManager
+import ru.nsu.ccfit.zuev.skins.OsuSkin
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.reflect.KClass
 
 /**
  * A deliberately isolated native osu!taiko beta scene.
@@ -78,13 +91,26 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
 
     private val screenWidth = Config.getRES_WIDTH().toFloat()
     private val screenHeight = Config.getRES_HEIGHT().toFloat()
-    private val laneY = screenHeight * 0.39f
-    private val targetX = screenWidth * 0.18f
+    private val laneTop = screenHeight * 0.29f
+    private val laneHeight = screenHeight * 0.25f
+    private val laneBottom = laneTop + laneHeight
+    private val laneY = laneTop + laneHeight / 2f
+    private val leftPanelWidth = screenWidth * 0.14f
+    private val targetX = screenWidth * 0.21f
     private val spawnX = screenWidth + 80f
-    private val inputTop = screenHeight * 0.72f
+    private val normalNoteDiameter = laneHeight * 0.52f
+    private val bigNoteDiameter = laneHeight * 0.78f
 
     private val playfield = UIContainer()
-    private val statusText: UIText
+    private val hudLayer = UIContainer()
+    private lateinit var scoreCounter: HUDScoreCounter
+    private lateinit var accuracyCounter: HUDAccuracyCounter
+    private lateinit var comboCounter: HUDComboCounter
+    private lateinit var healthBar: HUDHealthBar
+    private lateinit var songProgress: HUDSongProgress
+    private lateinit var skipButton: UIAnimatedSprite
+    private lateinit var inputFlash: UICircle
+    private lateinit var songIntro: UIContainer
     private val judgementText: UIText
     private val loadingText: UIText
     private val modal: UIContainer
@@ -92,7 +118,6 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private lateinit var primaryButton: UITextButton
     private lateinit var restartButton: UITextButton
 
-    private var beatmap: Beatmap? = null
     private var objects = emptyList<TaikoObject>()
     private var preempt = 1650.0
     private var greatWindow = 35.0
@@ -101,6 +126,14 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private var isPaused = false
     private var isFinished = false
     private var judgementTimeRemaining = 0f
+    private var inputFlashTimeRemaining = 0f
+    private var introShownAt = System.currentTimeMillis()
+    private var isLoaded = false
+    private var songHasStarted = false
+    private var leadInRemaining = 0.0
+    private var firstObjectStartTime = 0.0
+    private var lastObjectEndTime = 0.0
+    private var skipTargetTime = 0.0
 
     private var score = 0L
     private var combo = 0
@@ -109,8 +142,10 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private var goodCount = 0
     private var missCount = 0
     private var rollHits = 0
+    private var health = 0.5f
 
     init {
+        // Keep the selected beatmap background visible below the Taiko lane.
         sprite {
             width = FillParent
             height = FillParent
@@ -124,83 +159,228 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
             width = FillParent
             height = FillParent
             color = Color4.Black
-            alpha = 0.72f
+            alpha = (1f - Config.getBackgroundBrightness()).coerceIn(0f, 1f)
+        }
+
+        // Warm header and dark upper-third lane based on the stable Taiko layout.
+        box {
+            width = FillParent
+            height = laneTop
+            color = Color4(0xFFF58B2A)
+            alpha = 0.92f
+        }
+
+        repeat(12) { index ->
+            val size = 10f + (index % 3) * 6f
+            circle {
+                x = leftPanelWidth + 35f + index * ((screenWidth - leftPanelWidth - 70f) / 12f)
+                y = 22f + (index % 4) * 20f
+                width = size
+                height = size
+                color = Color4.White
+                alpha = 0.18f
+            }
         }
 
         text {
-            x = 30f
-            y = 24f
+            x = leftPanelWidth + 22f
+            y = laneTop - 44f
             font = resources.getFont("middleFont")
-            color = Color4(0xFFFF80AB)
+            color = Color4.White
             text = "osu!taiko (BETA)"
         }
 
-        text {
-            x = 30f
-            y = 65f
-            width = screenWidth * 0.62f
-            font = resources.getFont("smallFont")
-            text = "${beatmapInfo.artistText} - ${beatmapInfo.titleText} [${beatmapInfo.version}]"
-        }
-
-        statusText = text {
-            x = screenWidth - 390f
-            y = 24f
-            width = 360f
-            alignment = Anchor.TopRight
-            font = resources.getFont("middleFont")
-            text = "Score 0  •  Combo 0x  •  100.00%"
+        box {
+            x = 0f
+            y = laneTop
+            width = FillParent
+            height = laneHeight
+            color = Color4(0xFF121218)
+            alpha = 0.97f
         }
 
         box {
             x = 0f
-            y = laneY - 58f
+            y = laneTop
             width = FillParent
-            height = 116f
-            color = Color4(0xFF181824)
-            alpha = 0.95f
+            height = 3f
+            color = Color4(0xFF44444F)
         }
 
         box {
             x = 0f
-            y = laneY - 2f
+            y = laneBottom - 3f
             width = FillParent
-            height = 4f
-            color = Color4(0xFF55556A)
+            height = 3f
+            color = Color4(0xFF050507)
         }
 
-        // Static hit target.
+        // Left drum panel. It is decorative only; playable controls remain invisible.
+        box {
+            x = 0f
+            y = laneTop
+            width = leftPanelWidth
+            height = laneHeight
+            color = Color4(0xFFE83E78)
+            alpha = 0.96f
+        }
+
         circle {
-            x = targetX - 50f
-            y = laneY - 50f
-            width = 100f
-            height = 100f
-            color = Color4(0xFFFFFFFF)
-            alpha = 0.24f
+            val diameter = laneHeight * 0.72f
+            x = (leftPanelWidth - diameter) / 2f
+            y = laneY - diameter / 2f
+            width = diameter
+            height = diameter
+            color = Color4(0xFFFFF7E8)
+
+            circle {
+                x = 6f
+                y = 6f
+                width = diameter - 12f
+                height = diameter - 12f
+                color = Color4(0xFF9B8792)
+                alpha = 0.35f
+                paintStyle = PaintStyle.Outline
+                lineWidth = 4f
+            }
+        }
+
+        text {
+            x = 0f
+            y = laneY - 13f
+            width = leftPanelWidth
+            alignment = Anchor.TopCenter
+            font = resources.getFont("smallFont")
+            color = Color4(0xFF4A3440)
+            text = "BETA"
+        }
+
+        // Static hit target with a warm hit-flash layer.
+        val targetDiameter = laneHeight * 0.76f
+        circle {
+            x = targetX - targetDiameter / 2f
+            y = laneY - targetDiameter / 2f
+            width = targetDiameter
+            height = targetDiameter
+            color = Color4(0xFFFFC13A)
+            alpha = 0.34f
             paintStyle = PaintStyle.Outline
-            lineWidth = 6f
+            lineWidth = 10f
+        }
+
+        circle {
+            x = targetX - targetDiameter * 0.36f
+            y = laneY - targetDiameter * 0.36f
+            width = targetDiameter * 0.72f
+            height = targetDiameter * 0.72f
+            color = Color4(0xFFFFFFFF)
+            alpha = 0.82f
+            paintStyle = PaintStyle.Outline
+            lineWidth = 4f
+        }
+
+        inputFlash = circle {
+            x = targetX - targetDiameter * 0.46f
+            y = laneY - targetDiameter * 0.46f
+            width = targetDiameter * 0.92f
+            height = targetDiameter * 0.92f
+            color = DON_COLOR
+            alpha = 0f
         }
 
         attachChild(playfield)
 
         judgementText = text {
-            x = targetX - 85f
-            y = laneY + 82f
-            width = 170f
+            x = targetX - 95f
+            y = laneBottom + 10f
+            width = 190f
             alignment = Anchor.TopCenter
             font = resources.getFont("middleFont")
             text = ""
         }
 
-        createInputZones()
+        box {
+            x = 0f
+            y = laneBottom
+            width = FillParent
+            height = 42f
+            color = Color4.Black
+            alpha = 0.78f
+        }
 
-        loadingText = text {
-            x = screenWidth / 2f - 180f
-            y = screenHeight / 2f - 20f
-            width = 360f
-            alignment = Anchor.Center
-            font = resources.getFont("middleFont")
-            text = "Loading osu!taiko (BETA)…"
+        text {
+            x = leftPanelWidth + 18f
+            y = laneBottom + 9f
+            width = screenWidth - leftPanelWidth - 36f
+            alignment = Anchor.TopRight
+            font = resources.getFont("smallFont")
+            text = "${beatmapInfo.artistText} - ${beatmapInfo.titleText} [${beatmapInfo.version}]"
+        }
+
+        createTaikoHud()
+
+        skipButton = UIAnimatedSprite(
+            "play-skip",
+            true,
+            OsuSkin.get().animationFramerate
+        ).apply {
+            origin = Anchor.BottomRight
+            setPosition(screenWidth, screenHeight)
+            alpha = 0.7f
+            isVisible = false
+        }
+        hudLayer.attachChild(skipButton)
+
+        // Reuse the same two-second beatmap intro presentation used by normal gameplay.
+        songIntro = container {
+            width = FillParent
+            height = FillParent
+
+            background = UIBox().apply {
+                color = Color4.Black
+                alpha = 0.72f
+            }
+
+            text {
+                x = 60f
+                y = screenHeight * 0.34f
+                width = screenWidth * 0.7f
+                font = resources.getFont("bigFont")
+                color = Color4(0xFFFF80AB)
+                text = beatmapInfo.titleText
+            }
+
+            text {
+                x = 60f
+                y = screenHeight * 0.34f + 74f
+                width = screenWidth * 0.7f
+                font = resources.getFont("middleFont")
+                color = Color4(0xFFFFB5CC)
+                text = beatmapInfo.version
+            }
+
+            text {
+                x = 60f
+                y = screenHeight * 0.34f + 122f
+                width = screenWidth * 0.7f
+                font = resources.getFont("middleFont")
+                text = "by ${beatmapInfo.artistText}"
+            }
+
+            text {
+                x = 60f
+                y = screenHeight - 92f
+                font = resources.getFont("smallFont")
+                color = Color4(0xFFFF80AB)
+                text = "osu!taiko (BETA)  •  Outer quarters: KAT  •  Inner half: DON"
+            }
+
+            loadingText = text {
+                x = 60f
+                y = screenHeight - 54f
+                font = resources.getFont("smallFont")
+                text = "Loading beatmap…"
+            }
         }
 
         modal = container {
@@ -267,31 +447,48 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         setOnSceneTouchListener { _, event -> handleTouch(event) }
     }
 
-    private fun createInputZones() {
-        val zoneWidth = screenWidth / 4f
-        val zoneHeight = screenHeight - inputTop
+    private fun createTaikoHud() {
+        hudLayer.width = FillParent
+        hudLayer.height = FillParent
+        attachChild(hudLayer)
 
-        repeat(4) { index ->
-            val isKat = index == 0 || index == 3
+        val selectedLayout = OsuSkin.get().hudSkinData
+        val defaultLayout = HUDSkinData.Default
 
-            box {
-                x = zoneWidth * index
-                y = inputTop
-                width = zoneWidth
-                height = zoneHeight
-                color = if (isKat) KAT_COLOR else DON_COLOR
-                alpha = 0.16f
-            }
+        fun dataFor(type: KClass<out HUDElement>): HUDElementSkinData =
+            selectedLayout.elements.firstOrNull { it.type == type }
+                ?: defaultLayout.elements.first { it.type == type }
 
-            text {
-                x = zoneWidth * index
-                y = inputTop + zoneHeight / 2f - 16f
-                width = zoneWidth
-                alignment = Anchor.TopCenter
-                font = resources.getFont("middleFont")
-                color = if (isKat) KAT_COLOR else DON_COLOR
-                text = if (isKat) "KAT" else "DON"
-            }
+        fun attach(element: HUDElement, data: HUDElementSkinData) {
+            hudLayer.attachChild(element)
+            element.setSkinData(data)
+        }
+
+        scoreCounter = HUDScoreCounter()
+        accuracyCounter = HUDAccuracyCounter()
+        comboCounter = HUDComboCounter()
+        healthBar = HUDHealthBar()
+
+        attach(scoreCounter, dataFor(HUDScoreCounter::class))
+        attach(accuracyCounter, dataFor(HUDAccuracyCounter::class))
+        attach(comboCounter, dataFor(HUDComboCounter::class))
+        attach(healthBar, dataFor(HUDHealthBar::class))
+
+        val progressData = selectedLayout.elements.firstOrNull {
+            it.type == HUDPieSongProgress::class || it.type == HUDLinearSongProgress::class
+        } ?: dataFor(HUDPieSongProgress::class)
+
+        songProgress = if (progressData.type == HUDLinearSongProgress::class) {
+            HUDLinearSongProgress()
+        } else {
+            HUDPieSongProgress()
+        }
+        attach(songProgress, progressData)
+
+        if (selectedLayout == defaultLayout) {
+            accuracyCounter.y += scoreCounter.y + scoreCounter.height
+            songProgress.y = accuracyCounter.y + accuracyCounter.transformedHeight / 2f
+            songProgress.x = accuracyCounter.x - accuracyCounter.transformedWidth - 18f
         }
     }
 
@@ -308,9 +505,18 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
                 BeatmapSkinManager.getInstance().loadBeatmapSkin(parsed.beatmapsetPath)
 
                 val taikoObjects = parsed.hitObjects.objects.map { it.toTaikoObject() }
+                if (taikoObjects.isEmpty()) {
+                    throw IllegalArgumentException("This osu!taiko beatmap has no playable objects")
+                }
+
                 val od = parsed.difficulty.od.toDouble().coerceIn(0.0, 10.0)
                 val calculatedGreatWindow = (50.0 - 3.0 * od).coerceAtLeast(20.0)
                 val calculatedGoodWindow = (120.0 - 8.0 * od).coerceAtLeast(40.0)
+                val firstObjectTime = taikoObjects.first().startTime
+                val lastObjectTime = taikoObjects.maxOf { it.endTime }
+                val calculatedSkipTarget = (
+                    firstObjectTime - max(2000.0, preempt)
+                ).coerceAtLeast(0.0)
 
                 if (!songService.preLoad(beatmapInfo.audioPath)) {
                     throw IllegalStateException("Unable to load beatmap audio")
@@ -323,13 +529,16 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
                 songService.seekTo(0)
 
                 updateThread {
-                    beatmap = parsed
                     objects = taikoObjects
                     greatWindow = calculatedGreatWindow
                     goodWindow = calculatedGoodWindow
-                    loadingText.isVisible = false
-                    isReady = true
-                    songService.play()
+                    firstObjectStartTime = firstObjectTime
+                    lastObjectEndTime = lastObjectTime
+                    skipTargetTime = calculatedSkipTarget
+                    leadInRemaining = parsed.general.audioLeadIn.toDouble().coerceAtLeast(0.0)
+                    skipButton.isVisible = calculatedSkipTarget > 1000.0
+                    loadingText.text = "Ready"
+                    isLoaded = true
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) {
@@ -366,15 +575,35 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     }
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
+        if (
+            isLoaded &&
+            !isReady &&
+            !isFinished &&
+            System.currentTimeMillis() - introShownAt >= SONG_INTRO_DURATION_MS
+        ) {
+            beginGameplay()
+        }
+
         if (isReady && !isPaused && !isFinished) {
-            val now = songService.positionPrecise
+            if (!songHasStarted) {
+                leadInRemaining -= deltaTimeSec * 1000.0
+
+                if (leadInRemaining <= 0.0) {
+                    leadInRemaining = 0.0
+                    songHasStarted = true
+                    songService.play()
+                }
+            }
+
+            val now = if (songHasStarted) songService.positionPrecise else -leadInRemaining
 
             processObjects(now)
-            updateStatus()
+            updateHud(now, deltaTimeSec)
+            updateSkipButton(now)
 
-            if (objects.isNotEmpty() && now > objects.last().endTime + 1800) {
+            if (now > lastObjectEndTime + 1800) {
                 finish()
-            } else if (songService.status == Status.STOPPED && now > 0) {
+            } else if (songHasStarted && songService.status == Status.STOPPED && now > 0) {
                 finish()
             }
         }
@@ -386,7 +615,43 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
             }
         }
 
+        if (inputFlashTimeRemaining > 0f) {
+            inputFlashTimeRemaining -= deltaTimeSec
+            inputFlash.alpha = (inputFlashTimeRemaining / INPUT_FLASH_DURATION).coerceIn(0f, 0.62f)
+        } else {
+            inputFlash.alpha = 0f
+        }
+
         super.onManagedUpdate(deltaTimeSec)
+    }
+
+    private fun beginGameplay() {
+        songIntro.isVisible = false
+        isReady = true
+
+        if (leadInRemaining <= 0.0) {
+            songHasStarted = true
+            songService.play()
+        }
+    }
+
+    private fun updateSkipButton(now: Double) {
+        if (skipButton.isVisible && (now >= skipTargetTime - 1000.0 || now >= firstObjectStartTime)) {
+            skipButton.isVisible = false
+        }
+    }
+
+    private fun skipIntro() {
+        if (!skipButton.isVisible || skipTargetTime <= 0.0) {
+            return
+        }
+
+        leadInRemaining = 0.0
+        songHasStarted = true
+        songService.seekTo(skipTargetTime.toInt())
+        songService.play()
+        skipButton.isVisible = false
+        resources.getSound("menuhit", false)?.play()
     }
 
     private fun processObjects(now: Double) {
@@ -424,22 +689,29 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     }
 
     private fun createObjectEntity(obj: TaikoObject): UIComponent = when (obj.kind) {
-        ObjectKind.Don, ObjectKind.Kat -> com.reco1l.andengine.shape.UICircle().apply {
-            val diameter = if (obj.isBig) 96f else 72f
+        ObjectKind.Don, ObjectKind.Kat -> UICircle().apply {
+            val diameter = if (obj.isBig) bigNoteDiameter else normalNoteDiameter
             width = diameter
             height = diameter
-            color = if (obj.kind == ObjectKind.Kat) KAT_COLOR else DON_COLOR
+            color = Color4.White
 
-            if (obj.isBig) {
-                circle {
-                    x = 7f
-                    y = 7f
-                    width = diameter - 14f
-                    height = diameter - 14f
-                    color = Color4.White
-                    paintStyle = PaintStyle.Outline
-                    lineWidth = 5f
-                }
+            circle {
+                val inset = if (obj.isBig) 7f else 5f
+                x = inset
+                y = inset
+                width = diameter - inset * 2f
+                height = diameter - inset * 2f
+                color = if (obj.kind == ObjectKind.Kat) KAT_COLOR else DON_COLOR
+            }
+
+            circle {
+                val centerSize = diameter * 0.27f
+                x = (diameter - centerSize) / 2f
+                y = (diameter - centerSize) / 2f
+                width = centerSize
+                height = centerSize
+                color = Color4.White
+                alpha = 0.78f
             }
         }
 
@@ -449,7 +721,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
                 ((obj.endTime - obj.startTime) / preempt * (spawnX - targetX)).toFloat()
             )
             width = durationWidth
-            height = if (obj.kind == ObjectKind.Denden) 64f else 42f
+            height = if (obj.kind == ObjectKind.Denden) laneHeight * 0.54f else laneHeight * 0.34f
             cornerRadius = height / 2f
             color = if (obj.kind == ObjectKind.Denden) Color4(0xFFFFC107) else Color4(0xFFFF7043)
             alpha = 0.88f
@@ -457,16 +729,30 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     }
 
     private fun handleTouch(event: TouchEvent): Boolean {
-        if (!event.isActionDown || !isReady || isPaused || isFinished || event.y < inputTop) {
+        if (!event.isActionDown || !isReady || isPaused || isFinished) {
             return false
         }
 
+        if (
+            skipButton.isVisible &&
+            event.x >= screenWidth - SKIP_TOUCH_RADIUS &&
+            event.y >= screenHeight - SKIP_TOUCH_RADIUS
+        ) {
+            skipIntro()
+            return true
+        }
+
+        // Four invisible full-height controls: outer quarters are Kat, inner quarters are Don.
         val isKat = event.x < screenWidth / 4f || event.x >= screenWidth * 3f / 4f
-        registerInput(isKat, songService.positionPrecise)
+        val now = if (songHasStarted) songService.positionPrecise else -leadInRemaining
+        registerInput(isKat, now)
         return true
     }
 
     private fun registerInput(isKat: Boolean, now: Double) {
+        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
+        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+
         val activeRoll = objects.firstOrNull {
             !it.judged &&
                 (it.kind == ObjectKind.Drumroll || it.kind == ObjectKind.Denden) &&
@@ -476,6 +762,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         if (activeRoll != null) {
             rollHits++
             score += if (activeRoll.kind == ObjectKind.Denden) 100 else 50
+            health = (health + 0.0025f).coerceAtMost(1f)
             showJudgement(if (activeRoll.kind == ObjectKind.Denden) "DEN!" else "ROLL", Color4(0xFFFFC107))
             playInputSound(isKat)
             return
@@ -508,11 +795,13 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
             greatCount++
             combo++
             score += (300L + combo * 12L) * multiplier
+            health = (health + 0.025f * multiplier).coerceAtMost(1f)
             showJudgement("GREAT", Color4(0xFFFFD54F))
         } else {
             goodCount++
             combo++
             score += (100L + combo * 4L) * multiplier
+            health = (health + 0.0125f * multiplier).coerceAtMost(1f)
             showJudgement("GOOD", Color4(0xFF81D4FA))
         }
 
@@ -535,6 +824,7 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     private fun registerMiss(obj: TaikoObject) {
         missCount++
         combo = 0
+        health = (health - 0.07f).coerceAtLeast(0f)
         showJudgement("MISS", Color4(0xFFB0BEC5))
         expire(obj)
     }
@@ -551,17 +841,29 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         judgementTimeRemaining = 0.35f
     }
 
-    private fun updateStatus() {
+    private fun calculateAccuracy(): Double {
         val judged = greatCount + goodCount + missCount
-        val accuracy = if (judged == 0) 100.0 else (greatCount * 2.0 + goodCount) / (judged * 2.0) * 100
+        return if (judged == 0) 1.0 else (greatCount * 2.0 + goodCount) / (judged * 2.0)
+    }
 
-        statusText.text = String.format(
-            Locale.US,
-            "Score %,d  •  Combo %dx  •  %.2f%%",
-            score,
-            combo,
-            accuracy
-        )
+    private fun updateHud(now: Double, deltaTimeSec: Float) {
+        scoreCounter.setScore(score)
+        accuracyCounter.setAccuracy(calculateAccuracy().toFloat())
+        comboCounter.setCombo(combo)
+        healthBar.setHealth(health, deltaTimeSec)
+
+        if (now < firstObjectStartTime) {
+            val progress = if (firstObjectStartTime <= 0.0) {
+                1f
+            } else {
+                (now.coerceAtLeast(0.0) / firstObjectStartTime).toFloat().coerceIn(0f, 1f)
+            }
+            songProgress.setProgress(progress, true)
+        } else {
+            val duration = (lastObjectEndTime - firstObjectStartTime).coerceAtLeast(1.0)
+            val progress = ((now - firstObjectStartTime) / duration).toFloat().coerceIn(0f, 1f)
+            songProgress.setProgress(progress, false)
+        }
     }
 
     fun pause() {
@@ -570,7 +872,9 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         }
 
         isPaused = true
-        songService.pause()
+        if (songHasStarted) {
+            songService.pause()
+        }
         modalTitle.text = "osu!taiko (BETA)\nPaused"
         primaryButton.apply {
             isVisible = true
@@ -582,6 +886,11 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     }
 
     fun togglePause() {
+        if (!isReady && !isFinished) {
+            exitToSongMenu()
+            return
+        }
+
         if (isFinished) {
             exitToSongMenu()
             return
@@ -601,7 +910,9 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
 
         hideModal()
         isPaused = false
-        songService.play()
+        if (songHasStarted) {
+            songService.play()
+        }
     }
 
     private fun finish() {
@@ -610,11 +921,12 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
         }
 
         isFinished = true
-        songService.pause()
-        updateStatus()
+        if (songHasStarted) {
+            songService.pause()
+        }
+        updateHud(lastObjectEndTime, 0.2f)
 
-        val judged = greatCount + goodCount + missCount
-        val accuracy = if (judged == 0) 100.0 else (greatCount * 2.0 + goodCount) / (judged * 2.0) * 100
+        val accuracy = calculateAccuracy() * 100
 
         modalTitle.text = String.format(
             Locale.US,
@@ -672,6 +984,9 @@ class TaikoGameScene private constructor(private val beatmapInfo: BeatmapInfo) :
     companion object {
         private val DON_COLOR = Color4(0xFFEF5350)
         private val KAT_COLOR = Color4(0xFF42A5F5)
+        private const val SONG_INTRO_DURATION_MS = 2000L
+        private const val INPUT_FLASH_DURATION = 0.12f
+        private const val SKIP_TOUCH_RADIUS = 250f
 
         @JvmStatic
         fun start(beatmapInfo: BeatmapInfo) {
