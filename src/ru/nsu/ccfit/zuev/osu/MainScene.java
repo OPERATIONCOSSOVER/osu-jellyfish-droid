@@ -21,6 +21,7 @@ import com.osudroid.ui.BannerManager;
 import com.osudroid.ui.BannerManager.BannerSprite;
 import com.osudroid.data.BeatmapInfo;
 import com.osudroid.ui.MainMenu;
+import com.osudroid.ui.SeasonalBackgroundManager;
 
 import com.osudroid.beatmaplisting.BeatmapListing;
 import com.reco1l.andengine.ui.UIConfirmDialog;
@@ -128,7 +129,7 @@ public class MainScene implements IUpdateHandler {
         VibratorManager.INSTANCE.init(context);
         scene = new UIScene();
 
-        final TextureRegion tex = ResourceManager.getInstance().getTexture("menu-background");
+        final TextureRegion tex = getMenuBackgroundTexture();
 
         if (tex != null) {
             float height = tex.getHeight();
@@ -503,6 +504,20 @@ public class MainScene implements IUpdateHandler {
         hitsound = ResourceManager.getInstance().loadSound("menuhit", "sfx/menuhit.ogg", false);
     }
 
+    /**
+     * The texture to use as the menu background, preferring the seasonal background when the
+     * setting is enabled and an image is available.
+     */
+    private TextureRegion getMenuBackgroundTexture() {
+        final TextureRegion seasonal = SeasonalBackgroundManager.load();
+
+        if (seasonal != null) {
+            return seasonal;
+        }
+
+        return ResourceManager.getInstance().getTexture("menu-background");
+    }
+
     public void loadBannerSprite() {
 
         if (!Config.isStayOnline()) {
@@ -839,11 +854,22 @@ public class MainScene implements IUpdateHandler {
         }
         particleEnabled = false;
         GlobalManager.getInstance().setSelectedBeatmap(beatmapInfo);
-        if (beatmapInfo.getBackgroundFilename() != null) {
+
+        // Resolved up front: when a seasonal background is in use it takes over from the beatmap
+        // background entirely, including for beatmaps that have no background of their own.
+        final TextureRegion seasonalTex = SeasonalBackgroundManager.load();
+
+        if (seasonalTex != null || beatmapInfo.getBackgroundFilename() != null) {
             try {
-                final TextureRegion tex = Config.isSafeBeatmapBg() ?
-                        ResourceManager.getInstance().getTexture("menu-background") :
-                        ResourceManager.getInstance().loadBackground(beatmapInfo.getBackgroundPath());
+                final TextureRegion tex;
+
+                if (seasonalTex != null) {
+                    tex = seasonalTex;
+                } else if (Config.isSafeBeatmapBg()) {
+                    tex = ResourceManager.getInstance().getTexture("menu-background");
+                } else {
+                    tex = ResourceManager.getInstance().loadBackground(beatmapInfo.getBackgroundPath());
+                }
 
                 if (tex != null) {
                     float height = tex.getHeight();
