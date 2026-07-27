@@ -8,9 +8,9 @@ import ru.nsu.ccfit.zuev.osu.GlobalManager
 /**
  * osu!taiko specific hit sample resolution.
  *
- * osu!taiko does not share its drum samples with osu!standard. While [TaikoGameScene] is the
- * active scene, every bank sample is looked up under the `taiko-` prefixed banks that ship in
- * `assets/sfx`:
+ * osu!taiko does not share its normal and soft samples with osu!standard. While [TaikoGameScene]
+ * is the active scene, those two banks are looked up under the `taiko-` prefixed banks that ship
+ * in `assets/sfx`:
  *
  * ```
  * taiko-normal-hitnormal   taiko-soft-hitnormal
@@ -19,13 +19,23 @@ import ru.nsu.ccfit.zuev.osu.GlobalManager
  * taiko-normal-hitclap     taiko-soft-hitclap
  * ```
  *
- * These are regular entries of `assets/sfx`, which means
+ * The bank mapping follows the sample set declared by the beatmap:
+ *
+ * | Beatmap sample set | Samples used                |
+ * |--------------------|-----------------------------|
+ * | Normal (`N:C1`)    | `taiko-normal-hit*`         |
+ * | Soft (`S:C1`)      | `taiko-soft-hit*`           |
+ * | Drum (`D:C1`)      | osu!standard `drum-hit*`    |
+ * | Unset              | `taiko-normal-hit*`         |
+ *
+ * The drum bank is deliberately left alone: osu!taiko ships no drum samples of its own, so maps
+ * hitsounded with `D:` keep playing the regular osu!standard drum samples instead of being
+ * silently rewritten to another bank.
+ *
+ * The taiko banks are regular entries of `assets/sfx`, which means
  * [ru.nsu.ccfit.zuev.osu.ResourceManager.loadCustomSkin] registers them like any other sound:
  * a user skin (or a beatmap skin) that contains a file with the same base name automatically
  * overrides the bundled one, so the taiko banks are fully skinnable.
- *
- * The osu!standard `normal-hit*` / `soft-hit*` / `drum-hit*` samples are deliberately **not**
- * used as a fallback while playing taiko.
  */
 object TaikoHitSounds {
 
@@ -48,8 +58,9 @@ object TaikoHitSounds {
      * Returns the filenames to look a [HitSampleInfo] up with while playing taiko, in order of
      * preference (highest first).
      *
-     * Samples that come from a file declared by the beatmap itself are left untouched - only the
-     * bank samples are remapped, and they never fall back to the osu!standard banks.
+     * Samples that come from a file declared by the beatmap itself are left untouched, and so are
+     * drum bank samples. Only the normal and soft banks are remapped onto the taiko sample set,
+     * and those never fall back to their osu!standard counterparts.
      */
     @JvmStatic
     fun lookupNamesFor(sample: HitSampleInfo): List<String> {
@@ -57,13 +68,13 @@ object TaikoHitSounds {
             return sample.lookupNames
         }
 
-        // Taiko only ships the normal and soft banks. Anything else (including maps that do not
-        // declare a bank at all) falls back to the taiko normal bank rather than to osu!standard.
-        val bank = when (sample.bank) {
-            SampleBank.Soft -> SampleBank.Soft
-            SampleBank.Normal -> SampleBank.Normal
-            else -> SampleBank.Normal
+        // Drum banks stay on the osu!standard drum samples.
+        if (sample.bank == SampleBank.Drum) {
+            return sample.lookupNames
         }
+
+        // Soft keeps the taiko soft bank; normal and unset banks both use the taiko normal bank.
+        val bank = if (sample.bank == SampleBank.Soft) SampleBank.Soft else SampleBank.Normal
 
         return buildList {
             if (sample.customSampleBank >= 2) {
@@ -71,10 +82,6 @@ object TaikoHitSounds {
             }
 
             add("$PREFIX${bank.prefix}-${sample.name}")
-
-            if (bank != SampleBank.Normal) {
-                add("$PREFIX${SampleBank.Normal.prefix}-${sample.name}")
-            }
         }
     }
 }
