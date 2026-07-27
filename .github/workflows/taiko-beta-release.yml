@@ -19,11 +19,13 @@ jobs:
     env:
       RELEASE_TAG: "20260727-taiko-beta.6"
       RELEASE_TITLE: "osu!jellyfish 20260727 Taiko Beta 6"
-      RELEASE_TARGET: "35e0d4d45330e8dec03ffae7325e0cdd8610133e"
+      RELEASE_TARGET: "b04d41c157faf57091fe531845b7b2037e42106d"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: b04d41c157faf57091fe531845b7b2037e42106d
 
       - name: Set up Java and Gradle
         uses: ./.github/actions/setup-java-gradle
@@ -76,6 +78,11 @@ jobs:
           - Custom sample bank indices (`taiko-normal-hitnormal2` and friends) still resolve
             first, and the taiko banks remain fully skinnable: a user skin or beatmap skin
             containing a file with the same name overrides the bundled sample.
+
+          ### Build
+
+          - The pre-release version suffix now reads `-taiko-beta.6`, so the APK filename and the
+            version shown in-app match the release instead of still saying beta.4.
 
           Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko
           multiplayer, online leaderboards, replay storage, and score uploads are disabled.
