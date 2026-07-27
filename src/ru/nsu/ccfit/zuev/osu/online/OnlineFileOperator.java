@@ -20,6 +20,15 @@ public class OnlineFileOperator {
     }
 
     public static boolean downloadFile(String urlstr, String filename, boolean checkModificationDate) {
+        if (OnlineManager.OFFLINE_MODE) {
+            // Offline build: no remote file is ever fetched. A locally cached copy is still
+            // considered valid so that anything already on the device keeps working.
+            File cached = new File(filename);
+
+            Debug.i("Download of " + urlstr + " skipped, offline build.");
+            return cached.exists();
+        }
+
         Debug.i("Starting download " + urlstr);
         File file = new File(filename);
         try {
