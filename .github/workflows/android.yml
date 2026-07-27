@@ -50,13 +50,15 @@ jobs:
 
     - name: Publish Taiko beta GitHub pre-release
       if: >-
-        github.event.pull_request.head.ref == 'agent/taiko-beta' &&
-        github.event.pull_request.head.repo.full_name == github.repository
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.pull_request.head.ref == 'agent/taiko-beta' ||
+         startsWith(github.event.pull_request.head.ref, 'release/'))
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: 20260727-taiko-beta.2
-        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 2
+        RELEASE_TAG: 20260727-taiko-beta.4
+        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 4
         RELEASE_TARGET: ${{ github.event.pull_request.head.sha }}
       run: |
         mapfile -t apks < <(
@@ -69,19 +71,34 @@ jobs:
         fi
 
         cat > release-notes.md <<'EOF'
-        ## osu!jellyfish 20260727 Taiko Beta 2
+        ## osu!jellyfish 20260727 Taiko Beta 4
 
-        This experimental release adds native **osu!taiko** gameplay with a redesigned
-        stable-style Taiko playfield.
+        ### osu!taiko scrolling and hit feedback
 
-        - Detects native Taiko beatmaps from `[General] Mode: 1`.
-        - Adds an **osu!taiko (BETA)** ruleset selector in song select.
-        - Places the Taiko lane across the upper third with the beatmap background below it.
-        - Reuses the existing skinnable score, accuracy, combo, progress, and health HUD.
-        - Restores the existing two-second beatmap song intro and long-intro skip control.
-        - Uses invisible full-height controls: outer quarters are Kat and inner quarters are Don.
-        - Supports Don, Kat, big notes, drumrolls, denden, scoring, combo, and accuracy.
-        - Rescans existing song folders once after upgrading so previously ignored Taiko maps appear.
+        - Scroll speed is now resolved per object from the beatmap's timing and difficulty
+          control points, so BPM changes and slider velocity changes are respected. Previously
+          every note took a fixed 1.65s to cross the lane regardless of the map.
+        - Hit windows follow the documented spec, including a real miss window. Notes now expire
+          on the miss window rather than being discarded at the OK boundary.
+        - Hit explosions are anchored to the judgement circle instead of following the note, and
+          use normal rather than additive blending.
+        - Hit notes fly away toward the health bar; missed notes keep scrolling and fade out.
+        - Fixed autoplay drumroll and denden throttles that compared millisecond song positions
+          against second-scale values, causing autoplay to fire every frame.
+        - The health gauge now starts empty, matching taiko.
+
+        ### Seasonal backgrounds
+
+        - New **Background** section in Graphics settings with a seasonal backgrounds toggle.
+        - Images are read from an `osu!droid/SeasonalBackgrounds/` folder, which may either hold
+          images directly or contain `Winter`, `Spring`, `Summer` and `Autumn` subfolders. A
+          subfolder matching the current season wins; otherwise loose images are used.
+        - Optional slideshow that crossfades between the images in the folder, with a
+          configurable interval (5-300 seconds, default 30).
+        - `.png`, `.jpg`, `.jpeg` and `.bmp` are accepted. The toggle is off by default, and the
+          game falls back to the normal background when the folder is missing or empty.
+        - The folder is not created for you, and it is scanned once per session, so add images
+          before launching the game.
 
         Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko multiplayer,
         online leaderboards, replay storage, and score uploads are disabled.
