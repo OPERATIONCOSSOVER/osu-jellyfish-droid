@@ -34,6 +34,36 @@
 
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="@string/opt_category_background">
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="seasonalBackgrounds"
+            android:summary="@string/opt_seasonal_backgrounds_summary"
+            android:title="@string/opt_seasonal_backgrounds_title"
+            app:layout="@layout/settings_preference_checkbox" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:dependency="seasonalBackgrounds"
+            android:key="seasonalBackgroundsSlideshow"
+            android:summary="@string/opt_seasonal_backgrounds_slideshow_summary"
+            android:title="@string/opt_seasonal_backgrounds_slideshow_title"
+            app:layout="@layout/settings_preference_checkbox" />
+
+        <com.osudroid.ui.EditableSeekBarPreference
+            android:defaultValue="30"
+            android:dependency="seasonalBackgroundsSlideshow"
+            android:key="seasonalBackgroundsInterval"
+            android:max="300"
+            android:summary="@string/opt_seasonal_backgrounds_interval_summary"
+            android:title="@string/opt_seasonal_backgrounds_interval_title"
+            app:min="5"
+            app:showSeekBarValue="true"
+            app:layout="@layout/settings_preference_seekbar" />
+
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/opt_category_hud">
 
         <CheckBoxPreference

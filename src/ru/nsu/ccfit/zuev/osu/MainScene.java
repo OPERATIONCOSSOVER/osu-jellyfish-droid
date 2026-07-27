@@ -21,6 +21,7 @@ import com.osudroid.ui.BannerManager;
 import com.osudroid.ui.BannerManager.BannerSprite;
 import com.osudroid.data.BeatmapInfo;
 import com.osudroid.ui.MainMenu;
+import com.osudroid.ui.SeasonalBackgroundManager;
 
 import com.osudroid.beatmaplisting.BeatmapListing;
 import com.reco1l.andengine.ui.UIConfirmDialog;
@@ -83,6 +84,12 @@ import ru.nsu.ccfit.zuev.osuplus.BuildConfig;
  * Created by Fuuko on 2015/4/24.
  */
 public class MainScene implements IUpdateHandler {
+
+    /**
+     * How long the outgoing background takes to fade away, in seconds.
+     */
+    private static final float BACKGROUND_FADE_DURATION = 1.5f;
+
     public LinearSongProgress progressBar;
     public BeatmapInfo beatmapInfo;
     private Context context;
@@ -120,6 +127,11 @@ public class MainScene implements IUpdateHandler {
     private float showPassTime = 0;
     private float menuBarX = 0;
 
+    /**
+     * Seconds the current seasonal background has been on screen for.
+     */
+    private float seasonalSlideTime = 0;
+
     private MainMenu menu;
 
     public void load(Context context) {
@@ -128,7 +140,7 @@ public class MainScene implements IUpdateHandler {
         VibratorManager.INSTANCE.init(context);
         scene = new UIScene();
 
-        final TextureRegion tex = ResourceManager.getInstance().getTexture("menu-background");
+        final TextureRegion tex = getMenuBackgroundTexture();
 
         if (tex != null) {
             float height = tex.getHeight();
@@ -503,6 +515,84 @@ public class MainScene implements IUpdateHandler {
         hitsound = ResourceManager.getInstance().loadSound("menuhit", "sfx/menuhit.ogg", false);
     }
 
+    /**
+     * The texture to use as the menu background, preferring the seasonal background when the
+     * setting is enabled and an image is available.
+     */
+    private TextureRegion getMenuBackgroundTexture() {
+        final TextureRegion seasonal = SeasonalBackgroundManager.load();
+
+        if (seasonal != null) {
+            return seasonal;
+        }
+
+        return ResourceManager.getInstance().getTexture("menu-background");
+    }
+
+    /**
+     * Swaps the background for one showing [tex], fading the outgoing one away over
+     * [fadeDuration] seconds.
+     *
+     * The incoming sprite is attached underneath the outgoing one and is already opaque, so the
+     * fade reads as a crossfade.
+     */
+    private void applyBackgroundTexture(TextureRegion tex, float fadeDuration) {
+        if (tex == null) {
+            return;
+        }
+
+        float height = tex.getHeight();
+        height *= Config.getRES_WIDTH()
+                / (float) tex.getWidth();
+
+        // Held in a local rather than read back off the field inside the listener below. Slides can
+        // follow one another closely enough for the field to have moved on by the time the modifier
+        // starts.
+        final Sprite incoming = new Sprite(0,
+                (Config.getRES_HEIGHT() - height) / 2, Config
+                .getRES_WIDTH(), height, tex);
+
+        background = incoming;
+
+        lastBackground.registerEntityModifier(new org.anddev.andengine.entity.modifier.AlphaModifier(fadeDuration, 1, 0, new IEntityModifier.IEntityModifierListener() {
+            @Override
+            public void onModifierStarted(IModifier<IEntity> pModifier, IEntity pItem) {
+                scene.attachChild(incoming, 0);
+            }
+
+            @Override
+            public void onModifierFinished(IModifier<IEntity> pModifier, final IEntity pItem) {
+                GlobalManager.getInstance().getMainActivity().runOnUpdateThread(pItem::detachSelf);
+            }
+        }));
+
+        lastBackground = incoming;
+    }
+
+    /**
+     * Advances the seasonal background slideshow, if it is running.
+     */
+    private void updateSeasonalSlideshow(final float pSecondsElapsed) {
+        if (!SeasonalBackgroundManager.isSlideshowEnabled()) {
+            seasonalSlideTime = 0;
+            return;
+        }
+
+        seasonalSlideTime += pSecondsElapsed;
+
+        if (seasonalSlideTime < SeasonalBackgroundManager.getIntervalSeconds()) {
+            return;
+        }
+
+        seasonalSlideTime = 0;
+
+        try {
+            applyBackgroundTexture(SeasonalBackgroundManager.next(), BACKGROUND_FADE_DURATION);
+        } catch (Exception e) {
+            Debug.e("Failed to advance the seasonal background: " + e);
+        }
+    }
+
     public void loadBannerSprite() {
 
         if (!Config.isStayOnline()) {
@@ -627,6 +717,8 @@ public class MainScene implements IUpdateHandler {
             }
             return;
         }
+
+        updateSeasonalSlideshow(pSecondsElapsed);
 
         if (GlobalManager.getInstance().getSongService() == null || !musicStarted || GlobalManager.getInstance().getSongService().getStatus() == Status.STOPPED) {
             bpmLength = 1000;
@@ -839,32 +931,24 @@ public class MainScene implements IUpdateHandler {
         }
         particleEnabled = false;
         GlobalManager.getInstance().setSelectedBeatmap(beatmapInfo);
-        if (beatmapInfo.getBackgroundFilename() != null) {
+
+        // Resolved up front: when a seasonal background is in use it takes over from the beatmap
+        // background entirely, including for beatmaps that have no background of their own.
+        final TextureRegion seasonalTex = SeasonalBackgroundManager.load();
+
+        if (seasonalTex != null || beatmapInfo.getBackgroundFilename() != null) {
             try {
-                final TextureRegion tex = Config.isSafeBeatmapBg() ?
-                        ResourceManager.getInstance().getTexture("menu-background") :
-                        ResourceManager.getInstance().loadBackground(beatmapInfo.getBackgroundPath());
+                final TextureRegion tex;
 
-                if (tex != null) {
-                    float height = tex.getHeight();
-                    height *= Config.getRES_WIDTH()
-                            / (float) tex.getWidth();
-                    background = new Sprite(0,
-                            (Config.getRES_HEIGHT() - height) / 2, Config
-                            .getRES_WIDTH(), height, tex);
-                    lastBackground.registerEntityModifier(new org.anddev.andengine.entity.modifier.AlphaModifier(1.5f, 1, 0, new IEntityModifier.IEntityModifierListener() {
-                        @Override
-                        public void onModifierStarted(IModifier<IEntity> pModifier, IEntity pItem) {
-                            scene.attachChild(background, 0);
-                        }
-
-                        @Override
-                        public void onModifierFinished(IModifier<IEntity> pModifier, final IEntity pItem) {
-                            GlobalManager.getInstance().getMainActivity().runOnUpdateThread(pItem::detachSelf);
-                        }
-                    }));
-                    lastBackground = background;
+                if (seasonalTex != null) {
+                    tex = seasonalTex;
+                } else if (Config.isSafeBeatmapBg()) {
+                    tex = ResourceManager.getInstance().getTexture("menu-background");
+                } else {
+                    tex = ResourceManager.getInstance().loadBackground(beatmapInfo.getBackgroundPath());
                 }
+
+                applyBackgroundTexture(tex, BACKGROUND_FADE_DURATION);
             } catch (Exception e) {
                 Debug.e(e.toString());
                 lastBackground.setAlpha(0);
