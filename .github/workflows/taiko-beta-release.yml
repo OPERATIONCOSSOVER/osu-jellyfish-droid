@@ -16,11 +16,11 @@ on:
       tag:
         description: "Release tag"
         required: true
-        default: "20260727-taiko-beta.5"
+        default: "20260727-taiko-beta.11"
       title:
         description: "Release title"
         required: true
-        default: "osu!jellyfish 20260727 Taiko Beta 5"
+        default: "osu!jellyfish Taiko Beta 11"
 
 permissions:
   contents: write
@@ -75,26 +75,22 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          ## osu!jellyfish 20260727 Taiko Beta 5
+          ## osu!jellyfish Taiko Beta 11
 
-          ### Taiko hitsounds
+          ### Fixed
 
-          - osu!taiko now plays its own hitsound set instead of the osu!standard samples. The
-            eight new banks ship in `assets/sfx`:
-            `taiko-normal-hitnormal`, `taiko-normal-hitwhistle`, `taiko-normal-hitfinish`,
-            `taiko-normal-hitclap`, and the matching `taiko-soft-*` samples.
-          - Sample lookup during taiko gameplay resolves the `taiko-` banks only, with no
-            fallback to `normal-hit*`, `soft-hit*` or `drum-hit*`. Drum and unset banks map to
-            the taiko normal bank, and custom sample bank indices
-            (`taiko-normal-hitnormal2` and friends) still work.
-          - Raw don/kat tap feedback now uses `taiko-normal-hitnormal` and
-            `taiko-normal-hitwhistle`. It previously looked up unregistered sample names and was
-            silent.
-          - The new banks are skinnable: a user skin or beatmap skin containing a file with the
-            same name overrides the bundled sample.
+          - The main menu no longer crashes when the osu! theme song starts playing. The
+            `timingControlPoints` and `effectControlPoints` fields are now null-checked before
+            calling `.isEmpty()` in `MainScene.onUpdate`, preventing a `NullPointerException`
+            that occurred because these fields are not initialized until a beatmap is loaded.
 
-          Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko
-          multiplayer, online leaderboards, replay storage, and score uploads are disabled.
+          ### Carried over from Beta 10
+
+          - The osu! theme song (circles! by nekodex) plays on the main menu.
+          - Offline mode: no login, score submission, online leaderboards, or update checks.
+          - Seasonal backgrounds advance when returning to the main menu or changing songs.
+          - Taiko hitsounds: don uses `hitnormal`; kat uses `hitclap`; big don uses `hitnormal` +
+            `hitfinish`; big kat uses `hitwhistle` + `hitfinish`.
           EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
