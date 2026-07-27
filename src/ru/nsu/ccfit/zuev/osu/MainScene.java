@@ -553,12 +553,12 @@ public class MainScene implements IUpdateHandler {
                 progressBar.setTime(GlobalManager.getInstance().getSongService().getLength());
                 progressBar.setPassedTime(position);
                 progressBar.update(pSecondsElapsed * 1000);
-                if (!timingControlPoints.isEmpty() && position > timingControlPoints.peek().time) {
+                if (timingControlPoints != null && !timingControlPoints.isEmpty() && position > timingControlPoints.peek().time) {
                     while (!timingControlPoints.isEmpty() && position > timingControlPoints.peek().time) { currentTimingPoint = timingControlPoints.pop(); }
                     bpmLength = currentTimingPoint.msPerBeat;
                     beatPassTime = (position - currentTimingPoint.time) % bpmLength;
                 }
-                if (!effectControlPoints.isEmpty() && position > effectControlPoints.peek().time) {
+                if (effectControlPoints != null && !effectControlPoints.isEmpty() && position > effectControlPoints.peek().time) {
                     while (!effectControlPoints.isEmpty() && position > effectControlPoints.peek().time) { currentEffectPoint = effectControlPoints.pop(); }
                     if (!isContinuousKiai && currentEffectPoint.isKiai) {
                         for (ParticleSystem particleSpout : particleSystem) { particleSpout.setParticlesSpawnEnabled(true); }
