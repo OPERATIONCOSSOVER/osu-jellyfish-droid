@@ -1,0 +1,93 @@
+name: Taiko Beta 8 Release
+
+on:
+  push:
+    branches:
+      - ci/release-taiko-beta.8
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taiko-beta-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: 20260727-taiko-beta.8
+  RELEASE_TITLE: osu!jellyfish Taiko Beta 8
+  RELEASE_TARGET: 5df1bfa8ea534b35ff7d3f8f861ed222febe83ef
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v6
+        with:
+          ref: 5df1bfa8ea534b35ff7d3f8f861ed222febe83ef
+          submodules: recursive
+
+      - name: Set up Java and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Build the pre-release APK
+        run: ./gradlew assemblePre_release
+
+      - name: Upload the APK as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: osu-jellyfish-taiko-beta-8
+          path: build/outputs/apk/pre_release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t APKS < <(find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk')
+
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "No APK was produced by the build." >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<'NOTES'
+          ## osu!jellyfish Taiko Beta 8
+
+          ### Fixed
+
+          - Seasonal backgrounds no longer change when the slideshow is turned off. Returning to the
+            main menu or changing the song with the next/previous buttons kept falling back to the
+            beatmap background, because a first failed lookup of the `SeasonalBackgrounds` folder was
+            cached for the rest of the session.
+          - The folder lookup is now retried (throttled to once every few seconds) until an image is
+            actually on screen, and once one is, that same image is kept for the whole session.
+
+          ### Included from Beta 7
+
+          - Taiko note sounds are derived from the note type: **don** plays `hitnormal`, **kat** plays
+            `hitclap`, **big don** plays `hitnormal` + `hitfinish`, **big kat** plays `hitwhistle` +
+            `hitfinish`.
+          - The bundled `taiko-normal-*` and `taiko-soft-*` sounds live in `assets/sfx` and can be
+            overridden by a skin. Drum-bank notes keep using the standard osu! `drum-hit*` sounds.
+          NOTES
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${APKS[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${APKS[@]}" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
