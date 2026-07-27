@@ -1,0 +1,94 @@
+name: Taiko Beta 10 Release
+
+on:
+  push:
+    branches:
+      - ci/release-taiko-beta.10
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taiko-beta-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: 20260727-taiko-beta.10
+  RELEASE_TITLE: osu!jellyfish Taiko Beta 10
+  RELEASE_TARGET: 4fb8888413151f53ed5ef79ca13312a784d0bf3a
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v6
+        with:
+          ref: 4fb8888413151f53ed5ef79ca13312a784d0bf3a
+          submodules: recursive
+
+      - name: Set up Java and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Build the pre-release APK
+        run: ./gradlew assemblePre_release
+
+      - name: Upload the APK as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: osu-jellyfish-taiko-beta-10
+          path: build/outputs/apk/pre_release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t APKS < <(find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk')
+
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "No APK was produced by the build." >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<'NOTES'
+          ## osu!jellyfish Taiko Beta 10
+
+          ### osu! theme song
+
+          - The osu! theme song (*circles!* by nekodex) now plays on the main menu, matching the
+            behaviour of osu!stable.
+          - The track starts during the welcome intro and continues into the main menu, stops when
+            entering gameplay, and resumes when returning to the menu.
+          - The audio is bundled with the game and extracted to a `Theme/` folder on first run. It
+            lives outside the Songs directory, so it never appears in song select or the songs folder.
+          - A toggle is available under Settings > Background to turn the theme song off.
+
+          ### Carried over from Beta 9
+
+          - Offline mode: the osu!droid online session stays disabled, with no login, score
+            submission, online leaderboards, or update checks.
+          - Seasonal backgrounds advance when returning to the main menu or changing songs.
+          - Taiko hitsounds: don uses `hitnormal`; kat uses `hitclap`; big don uses `hitnormal` +
+            `hitfinish`; big kat uses `hitwhistle` + `hitfinish`.
+          NOTES
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${APKS[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${APKS[@]}" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
