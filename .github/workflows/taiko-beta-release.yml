@@ -1,0 +1,100 @@
+name: Taiko Beta 9 Release
+
+on:
+  push:
+    branches:
+      - ci/release-taiko-beta.9
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taiko-beta-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: 20260727-taiko-beta.9
+  RELEASE_TITLE: osu!jellyfish Taiko Beta 9
+  RELEASE_TARGET: 71c4ad308e6bb9affe548317c65464aa8af069cc
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v6
+        with:
+          ref: 71c4ad308e6bb9affe548317c65464aa8af069cc
+          submodules: recursive
+
+      - name: Set up Java and Gradle
+        uses: ./.github/actions/setup-java-gradle
+
+      - name: Build the pre-release APK
+        run: ./gradlew assemblePre_release
+
+      - name: Upload the APK as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: osu-jellyfish-taiko-beta-9
+          path: build/outputs/apk/pre_release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mapfile -t APKS < <(find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk')
+
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "No APK was produced by the build." >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<'NOTES'
+          ## osu!jellyfish Taiko Beta 9
+
+          ### Offline mode
+
+          - The osu!droid online session is disabled: the game no longer logs in, submits scores,
+            loads online leaderboards, downloads profile assets, looks up ranked status, or checks
+            the osu!droid update endpoint.
+          - POST requests and downloads routed through the legacy osu!droid online layer are blocked.
+          - Local beatmaps, scores, replays, skins, and taiko gameplay continue to work normally.
+
+          ### Seasonal backgrounds
+
+          - When seasonal backgrounds are enabled, returning to the main menu or pressing the
+            next/previous song button now advances to a different seasonal image.
+          - Beatmap backgrounds are used when the seasonal-background toggle is disabled, or when no
+            usable seasonal image has ever been loaded.
+          - Duplicate background requests from the same menu event are debounced to avoid skipping
+            images; failed folder scans are retried after a short cooldown.
+
+          ### Taiko hitsounds
+
+          - Don uses `hitnormal`; kat uses `hitclap`; big don uses `hitnormal` + `hitfinish`; big kat
+            uses `hitwhistle` + `hitfinish`.
+          - Bundled normal/soft taiko sounds remain skinnable, while drum-bank notes retain the
+            standard `drum-hit*` sounds.
+          NOTES
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${APKS[@]}" --clobber
+            gh release edit "$RELEASE_TAG" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          else
+            gh release create "$RELEASE_TAG" "${APKS[@]}" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
