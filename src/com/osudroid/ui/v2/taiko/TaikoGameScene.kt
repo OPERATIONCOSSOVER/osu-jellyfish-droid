@@ -13,6 +13,7 @@ import com.osudroid.beatmaps.parser.BeatmapParser
 import com.osudroid.data.BeatmapInfo
 import com.osudroid.utils.updateThread
 import com.reco1l.andengine.UIScene
+import com.reco1l.andengine.Anchor
 import com.reco1l.andengine.box
 import com.reco1l.andengine.circle
 import com.reco1l.andengine.component.UIComponent
@@ -28,7 +29,6 @@ import com.reco1l.andengine.text.UIText
 import com.reco1l.andengine.textButton
 import com.reco1l.andengine.ui.UITextButton
 import com.reco1l.framework.Color4
-import com.reco1l.framework.math.Anchor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
