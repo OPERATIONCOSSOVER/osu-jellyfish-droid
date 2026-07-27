@@ -122,7 +122,7 @@ android {
         pre_release {
             matchingFallbacks = ['release']
             resValue "string", "app_name", "osu!jellyfish (Taiko BETA)"
-            versionNameSuffix "-taiko-beta.1"
+            versionNameSuffix "-taiko-beta.2"
 //            minifyEnabled true
 //            debuggable true
 //            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard.cfg', 'proguard-kotlin.pro'
@@ -178,7 +178,7 @@ android {
     android.applicationVariants.configureEach { variant ->
         variant.outputs.configureEach { output ->
             def versionLabel = variant.buildType.name == "pre_release" ?
-                    "${defaultConfig.versionName}-taiko-beta.1" :
+                    "${defaultConfig.versionName}-taiko-beta.2" :
                     defaultConfig.versionName
             def fileName = "osu-jellyfish-${versionLabel}-${variant.buildType.name}.apk"
             outputFileName = fileName
