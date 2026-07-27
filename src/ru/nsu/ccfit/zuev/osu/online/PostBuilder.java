@@ -31,6 +31,16 @@ public abstract class PostBuilder {
     }
 
     public ArrayList<String> requestWithAttempts(final String scriptUrl, int attempts) throws RequestException {
+        if (OnlineManager.OFFLINE_MODE) {
+            // Offline build: the request is never sent. An empty response is returned, which every
+            // caller already treats as "no data".
+            Debug.i("POST to " + scriptUrl + " skipped, offline build.");
+
+            ArrayList<String> empty = new ArrayList<>();
+            empty.add("");
+            return empty;
+        }
+
         ArrayList<String> response = null;
         String signature = SecurityUtils.signRequest(values.toString());
 
