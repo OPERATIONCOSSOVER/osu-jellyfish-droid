@@ -16,10 +16,10 @@ import java.util.Calendar
  * either contain images directly, or one subfolder per season:
  *
  * ```
- * osu!droid/SeasonalBackgrounds/Winter/*.png
- * osu!droid/SeasonalBackgrounds/Spring/*.png
- * osu!droid/SeasonalBackgrounds/Summer/*.png
- * osu!droid/SeasonalBackgrounds/Autumn/*.png
+ * osu!droid/SeasonalBackgrounds/Winter/
+ * osu!droid/SeasonalBackgrounds/Spring/
+ * osu!droid/SeasonalBackgrounds/Summer/
+ * osu!droid/SeasonalBackgrounds/Autumn/
  * ```
  *
  * When a subfolder matching the current season exists and contains images, those are used.
