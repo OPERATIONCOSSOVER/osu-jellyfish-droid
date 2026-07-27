@@ -2,6 +2,7 @@ package com.osudroid.game
 
 import com.osudroid.beatmaps.hitobjects.BankHitSampleInfo
 import com.osudroid.beatmaps.hitobjects.HitSampleInfo
+import com.osudroid.ui.v2.taiko.TaikoHitSounds
 import com.osudroid.utils.IPoolable
 import com.osudroid.utils.SynchronizedPool
 import kotlin.math.max
@@ -59,8 +60,15 @@ class GameplayHitSampleInfo : IGameplayHitSampleInfo, IPoolable {
 
         this.sampleInfo = sampleInfo
 
-        for (i in sampleInfo.lookupNames.indices) {
-            val name = sampleInfo.lookupNames[i]
+        // While playing taiko, hit samples are resolved from the taiko-only banks that ship in
+        // assets/sfx (taiko-normal-*, taiko-soft-*). The osu!standard banks are intentionally not
+        // used as a fallback there. Those banks are skinnable like any other bundled sound.
+        val lookupNames =
+            if (TaikoHitSounds.isActive) TaikoHitSounds.lookupNamesFor(sampleInfo)
+            else sampleInfo.lookupNames
+
+        for (i in lookupNames.indices) {
+            val name = lookupNames[i]
             val soundProvider =
                 if (sampleInfo.useBeatmapSample) getResources().getCustomSound(name, false)
                 else getResources().getSound(name, false)
