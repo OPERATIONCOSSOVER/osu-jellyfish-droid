@@ -11,7 +11,7 @@ import java.io.File
  * Manages the osu! theme song, replicating the behaviour of osu!stable: the theme plays on the
  * main menu, stops when entering gameplay, and resumes when returning.
  *
- * The audio is bundled as a .osz inside `assets/theme/` and extracted to a `Theme/` folder under
+ * The audio is bundled as a .osz inside `assets/` and extracted to a `Theme/` folder under
  * the core directory on first run. The folder is outside the Songs directory, so the track never
  * appears in song select.
  */
@@ -19,7 +19,7 @@ object ThemeSongManager {
 
     private const val TAG = "ThemeSong"
     const val PREFERENCE_KEY = "themeSong"
-    private const val ASSET_PATH = "theme/nekodex - circles!.osz"
+    private const val ASSET_PATH = "nekodex - circles!.osz"
     private const val FOLDER_NAME = "Theme"
     private const val CACHE_OSZ_NAME = "theme-extract.osz"
 
