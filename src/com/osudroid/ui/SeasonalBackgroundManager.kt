@@ -26,7 +26,8 @@ import java.util.Calendar
  * Otherwise any image sitting directly in the folder root is used.
  *
  * The matching images form a shuffled playlist. With the slideshow enabled the menu walks through
- * it, crossfading between entries; otherwise the first entry is simply kept for the session.
+ * it, crossfading between entries; otherwise the first entry is kept for the rest of the session,
+ * no matter how often the menu asks for a background.
  */
 object SeasonalBackgroundManager {
 
@@ -46,6 +47,13 @@ object SeasonalBackgroundManager {
     const val MIN_INTERVAL_SECONDS = 5
 
     private const val TAG = "SeasonalBackground"
+
+    /**
+     * How long a failed resolve is remembered for, in milliseconds. Keeps a missing or unreadable
+     * folder from being rescanned on every single background change without giving up on it for the
+     * rest of the session.
+     */
+    private const val RESOLVE_RETRY_COOLDOWN_MS = 5000L
 
     /**
      * Two names are alternated rather than reusing a single one. A slide is still fading out while
@@ -70,11 +78,10 @@ object SeasonalBackgroundManager {
     private var slot = 0
 
     /**
-     * Whether the first slide has been resolved for this session. Tracked separately from
-     * [currentRegion] so that a folder with no usable images is not rescanned on every background
-     * change.
+     * When the last attempt at resolving the first slide was made, as a [System.currentTimeMillis]
+     * timestamp. Only meaningful while [currentRegion] is still `null`.
      */
-    private var isResolved = false
+    private var lastResolveAttemptTime = 0L
 
     private var currentRegion: TextureRegion? = null
 
@@ -139,6 +146,9 @@ object SeasonalBackgroundManager {
      * The texture currently being shown, loading the first slide if nothing has been shown yet.
      * Returns `null` when the setting is disabled or no usable image could be found.
      *
+     * Once a slide is on screen it is handed back for every later call, so the menu keeps the same
+     * image when it is returned to or the song is changed. Only [next] moves the slideshow on.
+     *
      * Must be called from a thread that is allowed to upload textures, in the same way as the other
      * [ResourceManager] loading calls made from the main menu.
      */
@@ -148,21 +158,30 @@ object SeasonalBackgroundManager {
             return null
         }
 
-        if (isResolved) {
-            return currentRegion
+        currentRegion?.let { return it }
+
+        val now = System.currentTimeMillis()
+
+        // A failed resolve is only remembered for a short while. The folder is not always readable
+        // by the time the menu first asks for a background, and with the slideshow disabled nothing
+        // else would ever retry: the menu would fall back to beatmap backgrounds and change on every
+        // song change and every return to the menu for the rest of the session.
+        if (lastResolveAttemptTime != 0L && now - lastResolveAttemptTime < RESOLVE_RETRY_COOLDOWN_MS) {
+            return null
         }
 
-        // Marked as resolved regardless of the outcome, a missing or empty folder should not be
-        // rescanned every time the background changes.
-        isResolved = true
+        lastResolveAttemptTime = now
+
+        // Nothing is on screen yet, so rescanning and reshuffling is safe here: no slide can be
+        // pulled out from under the menu by it.
+        playlist = null
+        playlistIndex = 0
 
         val files = getPlaylist()
 
         if (files.isEmpty()) {
             return null
         }
-
-        playlistIndex = 0
 
         return loadSlide(files[0])
     }
@@ -196,7 +215,7 @@ object SeasonalBackgroundManager {
         playlist = null
         playlistIndex = 0
         currentRegion = null
-        isResolved = false
+        lastResolveAttemptTime = 0L
     }
 
     /**
