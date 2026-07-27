@@ -1,5 +1,6 @@
 package ru.nsu.ccfit.zuev.osu.menu;
 
+import com.osudroid.ui.ThemeSongManager;
 import com.osudroid.utils.Execution;
 
 import org.anddev.andengine.engine.handler.IUpdateHandler;
@@ -88,6 +89,7 @@ public class SplashScene implements IUpdateHandler {
         scene.attachChild(welcomeSprite);
         welcomeSound.play();
         welcomePiano.play();
+        ThemeSongManager.play();
 
         welcomeSprite.registerEntityModifier(new ParallelEntityModifier(
                 new FadeInModifier(2.5f),
@@ -129,4 +131,3 @@ public class SplashScene implements IUpdateHandler {
 
     }
 }
-
