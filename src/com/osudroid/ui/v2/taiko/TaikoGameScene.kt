@@ -66,7 +66,6 @@ import ru.nsu.ccfit.zuev.osu.scoring.StatisticV2
 import com.osudroid.ui.v2.GameLoaderScene
 import com.osudroid.ui.v2.hud.GameplayHUD
 import ru.nsu.ccfit.zuev.osu.game.GameScene
-import ru.nsu.ccfit.zuev.osu.menu.SongMenu
 import java.util.concurrent.CompletableFuture
 import java.util.Locale
 import kotlin.math.abs
@@ -394,7 +393,7 @@ class TaikoGameScene private constructor(
         }
         hudLayer.attachChild(skipButton)
 
-        // Reuse the same two-second beatmap intro presentation used by normal gameplay.
+        // Fallback intro presentation. Normal flow uses the standard GameLoaderScene instead.
         songIntro = container {
             width = FillParent
             height = FillParent
@@ -558,11 +557,11 @@ class TaikoGameScene private constructor(
     }
 
     /**
-     * Creates the GameScene adapter and GameLoaderScene (standard beatmap intro screen),
-     * then starts async beatmap loading. The GameLoaderScene replaces the placeholder songIntro.
+     * Creates the GameScene adapter and GameLoaderScene (the standard beatmap loading/intro
+     * screen), then starts async beatmap loading.
      */
     fun beginLoadingWithLoader() {
-        val adapter = TaikoGameSceneAdapter(this)
+        val adapter = TaikoGameSceneAdapter()
         gameAdapter = adapter
 
         val loader = GameLoaderScene(adapter, beatmapInfo, mods, false)
@@ -1088,11 +1087,6 @@ class TaikoGameScene private constructor(
      * The sample names a note plays, chosen by note type rather than by whichever addition the
      * mapper happened to use.
      *
-     * A kat may be written as a whistle, a clap, or both, and any of them may sit on top of the
-     * base `hitnormal` sample. Playing the object's raw sample list therefore makes identical
-     * notes sound different from map to map, and stacks a don underneath every kat. The note type
-     * is authoritative instead:
-     *
      * - Don: `hitnormal`
      * - Kat: `hitclap`
      * - Big don: `hitnormal` with `hitfinish`
@@ -1114,8 +1108,7 @@ class TaikoGameScene private constructor(
      *
      * One of the object's own bank samples is used as the template, so the bank, custom sample
      * index and volume the mapper set all carry over untouched and only the sample name is
-     * replaced. Storyboarded file samples are left alone, and drumrolls and dendens keep playing
-     * whatever the map gave them.
+     * replaced.
      */
     private fun playableSamples(obj: TaikoObject): List<HitSampleInfo> {
         if (obj.kind != ObjectKind.Don && obj.kind != ObjectKind.Kat) {
@@ -1176,14 +1169,11 @@ class TaikoGameScene private constructor(
     }
 
     /**
-     * Plays the raw don/kat tap feedback for the sample bank in effect at [now]. The sample names
-     * match what a note of the same colour plays, so a tap that misses everything still sounds
-     * like the drum it was aimed at.
+     * Plays the raw don/kat tap feedback for the sample bank in effect at [now].
      *
-     * Normal and soft banks come from the taiko sample banks in `assets/sfx` (see
-     * [TaikoHitSounds]) and never fall back to the osu!standard samples, so a missing taiko sound
-     * stays silent. Drum banks use the osu!standard drum samples, matching how [TaikoHitSounds]
-     * resolves gameplay samples.
+     * Normal and soft banks come from the taiko sample banks in `assets/sfx` and never fall back
+     * to the osu!standard samples, so a missing taiko sound stays silent. Drum banks use the
+     * osu!standard drum samples.
      */
     private fun playInputSound(isKat: Boolean, now: Double) {
         val name = if (isKat) BankHitSampleInfo.HIT_CLAP else BankHitSampleInfo.HIT_NORMAL
@@ -1355,7 +1345,7 @@ class TaikoGameScene private constructor(
         }
         updateHud(lastObjectEndTime, 0.2f)
 
-        // Build a StatisticV2 from taiko stats so the existing standard results screen can display them.
+        // Build a StatisticV2 from taiko stats so the existing standard results screen can show them.
         val stat = StatisticV2().apply {
             setMod(mods)
             setPlayerName(Config.getOnlineUsername())
@@ -1364,24 +1354,24 @@ class TaikoGameScene private constructor(
             setHit100(goodCount)
             setMisses(missCount)
             setScoreMaxCombo(maxCombo)
-            setTotalScore(score.toLong())
+            setTotalScore(score)
             setBeatmapNoteCount(greatCount + goodCount + missCount)
             setBeatmapMaxCombo(greatCount + goodCount + missCount)
             setDiffModifier(1f)
             calculateModScoreMultiplier(null)
         }
 
-        // Use the existing ScoringScene (results screen) instead of the placeholder modal.
-        // A new ScoringScene is created with the taiko adapter so the retry button restarts taiko.
-        val adapter = gameAdapter ?: TaikoGameSceneAdapter(this).also { gameAdapter = it }
+        // Use the existing ScoringScene (results screen) instead of a placeholder modal.
+        // The taiko adapter is passed so the retry button restarts taiko.
+        val adapter = gameAdapter ?: TaikoGameSceneAdapter().also { gameAdapter = it }
         val scoring = scoringScene ?: ScoringScene(
             global.engine,
             adapter,
             global.songMenu
         ).also { scoringScene = it }
 
-        // Pass beatmapInfo so the results screen shows beatmap info and the retry button appears.
-        // Pass null mapMD5 so beatmap.getMD5().equals(null) is false -> score is NOT saved to database.
+        // beatmapInfo is passed so the results screen shows beatmap info and the retry button.
+        // mapMD5 is null so the MD5 equality check fails -> the score is NOT saved to the database.
         scoring.load(stat, beatmapInfo, songService, null, null, null)
         global.engine.scene = scoring.scene
     }
@@ -1402,7 +1392,7 @@ class TaikoGameScene private constructor(
         start(beatmapInfo, mods)
     }
 
-    /** Cancels async beatmap loading, used by GameLoaderScene back button via the adapter. */
+    /** Cancels async beatmap loading, used by GameLoaderScene's back button via the adapter. */
     fun cancelLoading() {
         loadingJob?.cancel()
         loadingJob = null
@@ -1430,11 +1420,14 @@ class TaikoGameScene private constructor(
      * A thin adapter that lets the existing standard GameLoaderScene and ScoringScene work with
      * TaikoGameScene without requiring TaikoGameScene to extend GameScene.
      *
-     * - [start] is called by GameLoaderScene when loading is complete; it switches the engine scene
+     * This is an inner class, so it implicitly holds a reference to the enclosing TaikoGameScene
+     * and takes no constructor arguments.
+     *
+     * - [start] is called by GameLoaderScene when loading completes; it switches the engine scene
      *   to the taiko scene and begins gameplay.
-     * - [cancelLoading] is called by GameLoaderScene when the user presses back; it cancels async loading.
+     * - [cancelLoading] is called by GameLoaderScene when the user presses back.
      * - [startGame] is called by ScoringScene's retry button; it restarts the taiko game.
-     * - [loadStoryboard] and [loadVideo] are no-ops since taiko beta does not support storyboards or video.
+     * - [loadStoryboard] and [loadVideo] are no-ops: taiko beta has no storyboard or video.
      */
     inner class TaikoGameSceneAdapter : GameScene(global.engine) {
         init {
@@ -1455,7 +1448,7 @@ class TaikoGameScene private constructor(
         }
 
         override fun startGame(beatmapInfo: BeatmapInfo?, replayFile: String?, mods: ModHashMap?) {
-            // Called by ScoringScene retry button -- restart the taiko game.
+            // Called by ScoringScene's retry button -- restart the taiko game.
             restart()
         }
 
