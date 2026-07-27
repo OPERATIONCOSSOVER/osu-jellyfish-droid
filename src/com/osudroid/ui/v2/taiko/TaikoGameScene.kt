@@ -1055,25 +1055,55 @@ class TaikoGameScene private constructor(
     }
 
     /**
-     * Returns the samples osu!taiko actually plays for [obj].
+     * The sample names a note plays, chosen by note type rather than by whichever addition the
+     * mapper happened to use.
      *
-     * Every osu! hit object carries a `hitnormal` sample, with whistle, clap and finish layered on
-     * top of it as additions. osu!taiko does not stack them like that: the addition identifies the
-     * note instead of decorating it, so a kat is a whistle or a clap rather than a whistle over a
-     * don. The base sample is therefore dropped for kats, while finishers are always kept so big
-     * notes retain their weight.
+     * A kat may be written as a whistle, a clap, or both, and any of them may sit on top of the
+     * base `hitnormal` sample. Playing the object's raw sample list therefore makes identical
+     * notes sound different from map to map, and stacks a don underneath every kat. The note type
+     * is authoritative instead:
+     *
+     * - Don: `hitnormal`
+     * - Kat: `hitclap`
+     * - Big don: `hitnormal` with `hitfinish`
+     * - Big kat: `hitwhistle` with `hitfinish`
+     */
+    private fun sampleNamesFor(obj: TaikoObject): List<String> = when {
+        obj.kind == ObjectKind.Kat && obj.isBig ->
+            listOf(BankHitSampleInfo.HIT_WHISTLE, BankHitSampleInfo.HIT_FINISH)
+
+        obj.kind == ObjectKind.Kat -> listOf(BankHitSampleInfo.HIT_CLAP)
+
+        obj.isBig -> listOf(BankHitSampleInfo.HIT_NORMAL, BankHitSampleInfo.HIT_FINISH)
+
+        else -> listOf(BankHitSampleInfo.HIT_NORMAL)
+    }
+
+    /**
+     * Returns the samples osu!taiko actually plays for [obj], rebuilt from [sampleNamesFor].
+     *
+     * One of the object's own bank samples is used as the template, so the bank, custom sample
+     * index and volume the mapper set all carry over untouched and only the sample name is
+     * replaced. Storyboarded file samples are left alone, and drumrolls and dendens keep playing
+     * whatever the map gave them.
      */
     private fun playableSamples(obj: TaikoObject): List<HitSampleInfo> {
-        if (obj.kind != ObjectKind.Kat) {
+        if (obj.kind != ObjectKind.Don && obj.kind != ObjectKind.Kat) {
             return obj.samples
         }
 
-        val withoutBase = obj.samples.filterNot {
-            it is BankHitSampleInfo && it.name == BankHitSampleInfo.HIT_NORMAL
-        }
+        val bankSamples = obj.samples.filterIsInstance<BankHitSampleInfo>()
 
-        // Never go silent: a kat that somehow only carries a base sample keeps playing it.
-        return withoutBase.ifEmpty { obj.samples }
+        // Prefer the base sample as the template: it is the one that always carries the object's
+        // own bank rather than an addition bank.
+        val template = bankSamples.firstOrNull { it.name == BankHitSampleInfo.HIT_NORMAL }
+            ?: bankSamples.firstOrNull()
+            // Never go silent: an object with no bank sample at all keeps what it had.
+            ?: return obj.samples
+
+        val fileSamples = obj.samples.filter { it !is BankHitSampleInfo }
+
+        return sampleNamesFor(obj).map { template.copy(name = it) } + fileSamples
     }
 
     private fun playSamples(obj: TaikoObject) {
@@ -1116,7 +1146,9 @@ class TaikoGameScene private constructor(
     }
 
     /**
-     * Plays the raw don/kat tap feedback for the sample bank in effect at [now].
+     * Plays the raw don/kat tap feedback for the sample bank in effect at [now]. The sample names
+     * match what a note of the same colour plays, so a tap that misses everything still sounds
+     * like the drum it was aimed at.
      *
      * Normal and soft banks come from the taiko sample banks in `assets/sfx` (see
      * [TaikoHitSounds]) and never fall back to the osu!standard samples, so a missing taiko sound
@@ -1124,7 +1156,7 @@ class TaikoGameScene private constructor(
      * resolves gameplay samples.
      */
     private fun playInputSound(isKat: Boolean, now: Double) {
-        val name = if (isKat) BankHitSampleInfo.HIT_WHISTLE else BankHitSampleInfo.HIT_NORMAL
+        val name = if (isKat) BankHitSampleInfo.HIT_CLAP else BankHitSampleInfo.HIT_NORMAL
 
         val lookupNames = when (activeBank(now)) {
             SampleBank.Drum -> listOf("${SampleBank.Drum.prefix}-$name", name)
