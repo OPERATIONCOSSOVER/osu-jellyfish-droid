@@ -9,6 +9,8 @@ import com.osudroid.beatmaps.hitobjects.HitSampleInfo
 import com.osudroid.beatmaps.hitobjects.Slider
 import com.osudroid.beatmaps.hitobjects.Spinner
 import com.osudroid.beatmaps.parser.BeatmapParser
+import com.osudroid.beatmaps.sections.BeatmapControlPoints
+import com.osudroid.beatmaps.sections.BeatmapDifficulty
 import com.osudroid.data.BeatmapInfo
 import com.osudroid.mods.ModAutoplay
 import com.osudroid.ui.v2.hud.HUDElement
@@ -86,8 +88,24 @@ class TaikoGameScene private constructor(
         val endTime: Double,
         val isBig: Boolean,
         val samples: List<HitSampleInfo>,
+        /** Scroll speed in pixels per millisecond, resolved from the map's timing and SV. */
+        var velocity: Double = 0.0,
+        /** Time in milliseconds this object takes to travel from spawn to the hit target. */
+        var preempt: Double = 1650.0,
         var judged: Boolean = false,
         var entity: UIComponent? = null
+    )
+
+    /**
+     * A note entity that has been judged and is now animating out. Keeping it around briefly
+     * avoids notes popping out of existence the instant they are hit or missed.
+     */
+    private class DecayingEntity(
+        val entity: UIComponent,
+        val duration: Float,
+        var remaining: Float,
+        val velocityX: Float,
+        val velocityY: Float
     )
 
     private val resources = ResourceManager.getInstance()
@@ -107,6 +125,11 @@ class TaikoGameScene private constructor(
     private val spawnX = screenWidth + 80f
     private val normalNoteDiameter = laneHeight * 0.52f
     private val bigNoteDiameter = laneHeight * 0.78f
+    private val targetDiameter = laneHeight * 0.76f
+    private val judgementBaseY = laneBottom + 10f
+
+    /** Distance a note travels from spawn to the judgement circle. */
+    private val travelDistance = spawnX - targetX
 
     private val playfield = UIContainer()
     private val hudLayer = UIContainer()
@@ -117,6 +140,7 @@ class TaikoGameScene private constructor(
     private lateinit var songProgress: HUDSongProgress
     private lateinit var skipButton: UIAnimatedSprite
     private lateinit var inputFlash: UICircle
+    private lateinit var hitExplosion: UICircle
     private lateinit var songIntro: UIContainer
     private val judgementText: UIText
     private lateinit var loadingText: UIText
@@ -126,14 +150,19 @@ class TaikoGameScene private constructor(
     private lateinit var restartButton: UITextButton
 
     private var objects = emptyList<TaikoObject>()
-    private var preempt = 1650.0
+    /** Notes before this index are all judged, so scanning can start here. */
+    private var firstActiveIndex = 0
+    private val decayingEntities = mutableListOf<DecayingEntity>()
     private var greatWindow = 35.0
     private var goodWindow = 80.0
+    private var missWindow = 95.0
     private var isReady = false
     private var isPaused = false
     private var isFinished = false
     private var judgementTimeRemaining = 0f
     private var inputFlashTimeRemaining = 0f
+    private var explosionTimeRemaining = 0f
+    private var explosionBaseDiameter = 0f
     private var introShownAt = System.currentTimeMillis()
     private var isBeatmapLoaded = false
     private var songHasStarted = false
@@ -149,7 +178,7 @@ class TaikoGameScene private constructor(
     private var goodCount = 0
     private var missCount = 0
     private var rollHits = 0
-    private var health = 0.5f
+    private var health = 0f
     private val isAutoPlay = mods.contains(ModAutoplay::class.java)
 
     init {
@@ -264,7 +293,6 @@ class TaikoGameScene private constructor(
         }
 
         // Static hit target with a warm hit-flash layer.
-        val targetDiameter = laneHeight * 0.76f
         circle {
             x = targetX - targetDiameter / 2f
             y = laneY - targetDiameter / 2f
@@ -289,18 +317,31 @@ class TaikoGameScene private constructor(
 
         inputFlash = circle {
             x = targetX - targetDiameter * 0.46f
-            y = laneY - targetDiameter * 0.46f
+            y = targetDiameter.let { laneY - it * 0.46f }
             width = targetDiameter * 0.92f
             height = targetDiameter * 0.92f
             color = DON_COLOR
             alpha = 0f
         }
 
+        // Hit explosion. Unlike the note itself this stays pinned to the judgement circle,
+        // matching stable osu!taiko where the burst never drifts with the note.
+        hitExplosion = circle {
+            x = targetX - normalNoteDiameter / 2f
+            y = laneY - normalNoteDiameter / 2f
+            width = normalNoteDiameter
+            height = normalNoteDiameter
+            color = DON_COLOR
+            alpha = 0f
+            paintStyle = PaintStyle.Outline
+            lineWidth = 6f
+        }
+
         attachChild(playfield)
 
         judgementText = text {
             x = targetX - 95f
-            y = laneBottom + 10f
+            y = judgementBaseY
             width = 190f
             alignment = Anchor.TopCenter
             font = resources.getFont("middleFont")
@@ -514,18 +555,26 @@ class TaikoGameScene private constructor(
 
                 BeatmapSkinManager.getInstance().loadBeatmapSkin(parsed.beatmapsetPath)
 
-                val taikoObjects = parsed.hitObjects.objects.map { it.toTaikoObject() }
+                val taikoObjects = parsed.hitObjects.objects.map {
+                    it.toTaikoObject(parsed.controlPoints, parsed.difficulty)
+                }
                 if (taikoObjects.isEmpty()) {
                     throw IllegalArgumentException("This osu!taiko beatmap has no playable objects")
                 }
 
+                // osu!taiko hit windows. Unlike the previous approximation these keep GREAT, OK
+                // and MISS separate, so a late tap inside the miss window is still judged rather
+                // than the note silently disappearing at the OK boundary.
                 val od = parsed.difficulty.od.toDouble().coerceIn(0.0, 10.0)
                 val calculatedGreatWindow = (50.0 - 3.0 * od).coerceAtLeast(20.0)
-                val calculatedGoodWindow = (120.0 - 8.0 * od).coerceAtLeast(40.0)
-                val firstObjectTime = taikoObjects.first().startTime
+                val calculatedGoodWindow = if (od <= 5.0) 120.0 - 8.0 * od else 110.0 - 6.0 * od
+                val calculatedMissWindow = if (od <= 5.0) 135.0 - 8.0 * od else 120.0 - 5.0 * od
+
+                val firstObject = taikoObjects.first()
+                val firstObjectTime = firstObject.startTime
                 val lastObjectTime = taikoObjects.maxOf { it.endTime }
                 val calculatedSkipTarget = (
-                    firstObjectTime - max(2000.0, preempt)
+                    firstObjectTime - max(2000.0, firstObject.preempt)
                 ).coerceAtLeast(0.0)
 
                 if (!songService.preLoad(beatmapInfo.audioPath)) {
@@ -540,8 +589,10 @@ class TaikoGameScene private constructor(
 
                 updateThread {
                     objects = taikoObjects
+                    firstActiveIndex = 0
                     greatWindow = calculatedGreatWindow
                     goodWindow = calculatedGoodWindow
+                    missWindow = calculatedMissWindow
                     firstObjectStartTime = firstObjectTime
                     lastObjectEndTime = lastObjectTime
                     skipTargetTime = calculatedSkipTarget
@@ -567,7 +618,10 @@ class TaikoGameScene private constructor(
         }
     }
 
-    private fun HitObject.toTaikoObject(): TaikoObject {
+    private fun HitObject.toTaikoObject(
+        controlPoints: BeatmapControlPoints,
+        difficulty: BeatmapDifficulty
+    ): TaikoObject {
         val bankSamples = samples.filterIsInstance<BankHitSampleInfo>()
         val isKat = bankSamples.any {
             it.name == BankHitSampleInfo.HIT_WHISTLE || it.name == BankHitSampleInfo.HIT_CLAP
@@ -581,7 +635,29 @@ class TaikoGameScene private constructor(
             else -> ObjectKind.Don
         }
 
-        return TaikoObject(kind, startTime, endTime, isBig, samples)
+        // Resolve scroll speed per object rather than using one fixed preempt for the whole map.
+        // This is what makes BPM changes and mid-map slider velocity changes read correctly.
+        val timingPoint = controlPoints.timing.controlPointAt(startTime)
+        val difficultyPoint = controlPoints.difficulty.controlPointAt(startTime)
+
+        // osu!taiko scrolls 175 pixels per beat per unit of slider velocity, referenced against
+        // an 800px wide playfield. The common SV 1.4 therefore gives the familiar 245 px/beat.
+        val pxPerBeat = TAIKO_SCROLL_PX_PER_BEAT *
+            difficulty.sliderMultiplier *
+            difficultyPoint.speedMultiplier *
+            (screenWidth / REFERENCE_PLAYFIELD_WIDTH)
+
+        val velocity = (pxPerBeat / timingPoint.msPerBeat).coerceAtLeast(0.01)
+
+        return TaikoObject(
+            kind,
+            startTime,
+            endTime,
+            isBig,
+            samples,
+            velocity = velocity,
+            preempt = (travelDistance / velocity).coerceIn(MIN_PREEMPT, MAX_PREEMPT)
+        )
     }
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
@@ -622,10 +698,22 @@ class TaikoGameScene private constructor(
             }
         }
 
+        if (!isPaused) {
+            updateDecayingEntities(deltaTimeSec)
+        }
+
+        // Judgement text drifts upward as it fades instead of blinking out.
         if (judgementTimeRemaining > 0f) {
             judgementTimeRemaining -= deltaTimeSec
+
             if (judgementTimeRemaining <= 0f) {
                 judgementText.text = ""
+                judgementText.y = judgementBaseY
+                judgementText.alpha = 1f
+            } else {
+                val progress = 1f - (judgementTimeRemaining / JUDGEMENT_DURATION).coerceIn(0f, 1f)
+                judgementText.y = judgementBaseY - JUDGEMENT_DRIFT * progress
+                judgementText.alpha = (1f - progress).coerceIn(0f, 1f)
             }
         }
 
@@ -636,7 +724,46 @@ class TaikoGameScene private constructor(
             inputFlash.alpha = 0f
         }
 
+        // The explosion expands from the judgement circle and stays centred on it.
+        if (explosionTimeRemaining > 0f) {
+            explosionTimeRemaining -= deltaTimeSec
+
+            val progress = 1f - (explosionTimeRemaining / EXPLOSION_DURATION).coerceIn(0f, 1f)
+            val diameter = explosionBaseDiameter * (1f + EXPLOSION_GROWTH * progress)
+
+            hitExplosion.width = diameter
+            hitExplosion.height = diameter
+            hitExplosion.x = targetX - diameter / 2f
+            hitExplosion.y = laneY - diameter / 2f
+            hitExplosion.alpha = (EXPLOSION_ALPHA * (1f - progress)).coerceIn(0f, 1f)
+        } else {
+            hitExplosion.alpha = 0f
+        }
+
         super.onManagedUpdate(deltaTimeSec)
+    }
+
+    private fun updateDecayingEntities(deltaTimeSec: Float) {
+        if (decayingEntities.isEmpty()) {
+            return
+        }
+
+        val iterator = decayingEntities.iterator()
+        while (iterator.hasNext()) {
+            val decaying = iterator.next()
+            decaying.remaining -= deltaTimeSec
+
+            if (decaying.remaining <= 0f) {
+                decaying.entity.detachSelf()
+                iterator.remove()
+                continue
+            }
+
+            val progress = 1f - (decaying.remaining / decaying.duration).coerceIn(0f, 1f)
+            decaying.entity.x += decaying.velocityX * deltaTimeSec
+            decaying.entity.y += decaying.velocityY * deltaTimeSec
+            decaying.entity.alpha = (1f - progress).coerceIn(0f, 1f)
+        }
     }
 
     private fun beginGameplay() {
@@ -668,27 +795,38 @@ class TaikoGameScene private constructor(
         resources.getSound("menuhit", false)?.play()
     }
 
+    /** Advances the scan cursor past the leading run of already-judged objects. */
+    private fun advanceActiveIndex() {
+        while (firstActiveIndex < objects.size && objects[firstActiveIndex].judged) {
+            firstActiveIndex++
+        }
+    }
+
     private fun processObjects(now: Double) {
-        for (obj in objects) {
+        advanceActiveIndex()
+
+        for (index in firstActiveIndex until objects.size) {
+            val obj = objects[index]
+
             if (obj.judged) {
                 continue
             }
 
-            if (obj.entity == null && now >= obj.startTime - preempt && now <= obj.endTime + goodWindow) {
+            if (obj.entity == null && now >= obj.startTime - obj.preempt && now <= obj.endTime + missWindow) {
                 val entity = createObjectEntity(obj)
                 obj.entity = entity
                 playfield.attachChild(entity)
             }
 
             obj.entity?.let { entity ->
-                val x = targetX + ((obj.startTime - now) / preempt * (spawnX - targetX)).toFloat()
+                val x = targetX + ((obj.startTime - now) * obj.velocity).toFloat()
                 entity.x = x - entity.width / 2f
                 entity.y = laneY - entity.height / 2f
             }
 
             when (obj.kind) {
                 ObjectKind.Don, ObjectKind.Kat -> {
-                    if (now - obj.startTime > goodWindow) {
+                    if (now - obj.startTime > missWindow) {
                         registerMiss(obj)
                     }
                 }
@@ -703,32 +841,35 @@ class TaikoGameScene private constructor(
     }
 
     private fun processAutoPlay(now: Double) {
+        advanceActiveIndex()
+
         // Auto-play Don/Kat notes with perfect timing.
-        for (obj in objects) {
+        for (index in firstActiveIndex until objects.size) {
+            val obj = objects[index]
+
             if (obj.judged) {
                 continue
             }
 
             when (obj.kind) {
                 ObjectKind.Don, ObjectKind.Kat -> {
-                    // Hit the note exactly at its start time (within 1ms tolerance).
+                    // Hit the note exactly at its start time.
                     if (now >= obj.startTime) {
-                        val isKat = obj.kind == ObjectKind.Kat
-                        autoHitNote(obj, isKat)
+                        autoHitNote(obj, obj.kind == ObjectKind.Kat)
                     }
                 }
 
                 ObjectKind.Drumroll -> {
                     // For drumrolls, tap every 100ms to simulate active rolling.
                     if (now in obj.startTime..obj.endTime) {
-                        autoHitRoll(obj, now)
+                        autoHitRoll(now)
                     }
                 }
 
                 ObjectKind.Denden -> {
                     // For denden (spinner), tap every 50ms for higher score.
                     if (now in obj.startTime..obj.endTime) {
-                        autoHitDenden(obj, now)
+                        autoHitDenden(now)
                     }
                 }
             }
@@ -748,6 +889,7 @@ class TaikoGameScene private constructor(
         score += (300L + combo * 12L) * multiplier
         health = (health + 0.025f * multiplier).coerceAtMost(1f)
         showJudgement("GREAT", Color4(0xFFFFD54F))
+        triggerHitExplosion(isKat, obj.isBig)
         maxCombo = max(maxCombo, combo)
 
         obj.samples.forEach { sample ->
@@ -757,12 +899,12 @@ class TaikoGameScene private constructor(
                 it.release()
             }
         }
-        expire(obj)
+        releaseHit(obj)
     }
 
-    private fun autoHitRoll(obj: TaikoObject, now: Double) {
-        // Tap every 100ms during a drumroll.
-        if (now - lastAutoRollTime < 0.1) {
+    private fun autoHitRoll(now: Double) {
+        // Tap every 100ms during a drumroll. Note that positions here are milliseconds.
+        if (now - lastAutoRollTime < AUTO_ROLL_INTERVAL) {
             return
         }
         lastAutoRollTime = now
@@ -771,15 +913,14 @@ class TaikoGameScene private constructor(
         score += 50
         health = (health + 0.0025f).coerceAtMost(1f)
 
-        val isKat = obj.kind == ObjectKind.Kat
-        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
+        inputFlash.color = DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
         showJudgement("ROLL", Color4(0xFFFFC107))
     }
 
-    private fun autoHitDenden(obj: TaikoObject, now: Double) {
+    private fun autoHitDenden(now: Double) {
         // Tap every 50ms during a denden for higher score.
-        if (now - lastAutoDendenTime < 0.05) {
+        if (now - lastAutoDendenTime < AUTO_DENDEN_INTERVAL) {
             return
         }
         lastAutoDendenTime = now
@@ -821,9 +962,10 @@ class TaikoGameScene private constructor(
         }
 
         ObjectKind.Drumroll, ObjectKind.Denden -> UIBox().apply {
+            // Length follows the object's own scroll speed so the body matches its duration.
             val durationWidth = max(
                 80f,
-                ((obj.endTime - obj.startTime) / preempt * (spawnX - targetX)).toFloat()
+                ((obj.endTime - obj.startTime) * obj.velocity).toFloat()
             )
             width = durationWidth
             height = if (obj.kind == ObjectKind.Denden) laneHeight * 0.54f else laneHeight * 0.34f
@@ -869,6 +1011,7 @@ class TaikoGameScene private constructor(
             score += if (activeRoll.kind == ObjectKind.Denden) 100 else 50
             health = (health + 0.0025f).coerceAtMost(1f)
             showJudgement(if (activeRoll.kind == ObjectKind.Denden) "DEN!" else "ROLL", Color4(0xFFFFC107))
+            triggerHitExplosion(isKat, false)
             playInputSound(isKat)
             return
         }
@@ -910,6 +1053,7 @@ class TaikoGameScene private constructor(
             showJudgement("GOOD", Color4(0xFF81D4FA))
         }
 
+        triggerHitExplosion(isKat, candidate.isBig)
         maxCombo = max(maxCombo, combo)
         candidate.samples.forEach { sample ->
             com.osudroid.game.GameplayHitSampleInfo.obtain().also {
@@ -918,7 +1062,7 @@ class TaikoGameScene private constructor(
                 it.release()
             }
         }
-        expire(candidate)
+        releaseHit(candidate)
     }
 
     private fun playInputSound(isKat: Boolean) {
@@ -931,7 +1075,51 @@ class TaikoGameScene private constructor(
         combo = 0
         health = (health - 0.07f).coerceAtLeast(0f)
         showJudgement("MISS", Color4(0xFFB0BEC5))
-        expire(obj)
+        releaseMiss(obj)
+    }
+
+    /**
+     * Fires the burst at the judgement circle. The size follows the note that was hit, but the
+     * position never does, which is what keeps the feedback readable at high scroll speeds.
+     */
+    private fun triggerHitExplosion(isKat: Boolean, isBig: Boolean) {
+        explosionBaseDiameter = if (isBig) bigNoteDiameter else normalNoteDiameter
+        hitExplosion.color = if (isKat) KAT_COLOR else DON_COLOR
+        explosionTimeRemaining = EXPLOSION_DURATION
+    }
+
+    /** Judged as a hit: the note drifts up and away toward the health bar while fading. */
+    private fun releaseHit(obj: TaikoObject) {
+        obj.judged = true
+        obj.entity?.let { entity ->
+            decayingEntities.add(
+                DecayingEntity(
+                    entity,
+                    HIT_DECAY_DURATION,
+                    HIT_DECAY_DURATION,
+                    HIT_DECAY_VELOCITY_X,
+                    HIT_DECAY_VELOCITY_Y
+                )
+            )
+        }
+        obj.entity = null
+    }
+
+    /** Judged as a miss: the note keeps travelling at its own speed and fades out. */
+    private fun releaseMiss(obj: TaikoObject) {
+        obj.judged = true
+        obj.entity?.let { entity ->
+            decayingEntities.add(
+                DecayingEntity(
+                    entity,
+                    MISS_DECAY_DURATION,
+                    MISS_DECAY_DURATION,
+                    -(obj.velocity * 1000.0).toFloat(),
+                    0f
+                )
+            )
+        }
+        obj.entity = null
     }
 
     private fun expire(obj: TaikoObject) {
@@ -943,7 +1131,9 @@ class TaikoGameScene private constructor(
     private fun showJudgement(text: String, color: Color4) {
         judgementText.text = text
         judgementText.color = color
-        judgementTimeRemaining = 0.35f
+        judgementText.y = judgementBaseY
+        judgementText.alpha = 1f
+        judgementTimeRemaining = JUDGEMENT_DURATION
     }
 
     private fun calculateAccuracy(): Double {
@@ -1080,6 +1270,7 @@ class TaikoGameScene private constructor(
         loadingJob?.cancel()
         loadingJob = null
         loadingScope.cancel()
+        decayingEntities.clear()
         songService.stop()
         songService.setGaming(false)
         BeatmapSkinManager.setSkinEnabled(false)
@@ -1092,6 +1283,30 @@ class TaikoGameScene private constructor(
         private const val SONG_INTRO_DURATION_MS = 2000L
         private const val INPUT_FLASH_DURATION = 0.12f
         private const val SKIP_TOUCH_RADIUS = 250f
+
+        /** Pixels travelled per beat at slider velocity 1.0, on an 800px reference playfield. */
+        private const val TAIKO_SCROLL_PX_PER_BEAT = 175.0
+        private const val REFERENCE_PLAYFIELD_WIDTH = 800f
+
+        /** Clamps for extreme slider velocities so notes never spawn absurdly early or late. */
+        private const val MIN_PREEMPT = 200.0
+        private const val MAX_PREEMPT = 6000.0
+
+        private const val EXPLOSION_DURATION = 0.12f
+        private const val EXPLOSION_GROWTH = 0.6f
+        private const val EXPLOSION_ALPHA = 0.85f
+
+        private const val JUDGEMENT_DURATION = 0.35f
+        private const val JUDGEMENT_DRIFT = 18f
+
+        private const val HIT_DECAY_DURATION = 0.4f
+        private const val HIT_DECAY_VELOCITY_X = -180f
+        private const val HIT_DECAY_VELOCITY_Y = -260f
+        private const val MISS_DECAY_DURATION = 0.22f
+
+        /** Autoplay tap intervals, in milliseconds to match song position units. */
+        private const val AUTO_ROLL_INTERVAL = 100.0
+        private const val AUTO_DENDEN_INTERVAL = 50.0
 
         @JvmStatic
         @JvmOverloads
