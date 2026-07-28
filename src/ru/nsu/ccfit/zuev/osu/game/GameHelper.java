@@ -45,6 +45,8 @@ public class GameHelper {
     private static ModMuted muted;
     private static ModFreezeFrame freezeFrame;
     private static ModApproachDifferent approachDifferent;
+    private static ModGrow grow;
+    private static ModDeflate deflate;
     private static boolean isKiai = false;
     private static ModAutoplay autoplay;
     private static double beatLength = 0;
@@ -351,6 +353,49 @@ public class GameHelper {
 
     public static void setApproachDifferent(final ModApproachDifferent approachDifferent) {
         GameHelper.approachDifferent = approachDifferent;
+    }
+
+    public static ModGrow getGrow() {
+        return grow;
+    }
+
+    public static boolean isGrow() {
+        return grow != null;
+    }
+
+    public static void setGrow(final ModGrow grow) {
+        GameHelper.grow = grow;
+    }
+
+    public static ModDeflate getDeflate() {
+        return deflate;
+    }
+
+    public static boolean isDeflate() {
+        return deflate != null;
+    }
+
+    public static void setDeflate(final ModDeflate deflate) {
+        GameHelper.deflate = deflate;
+    }
+
+    /**
+     * Gets the active hit object scale tween mod, if any.
+     * <p>
+     * Grow and Deflate are mutually incompatible, so at most one of them can ever be active. This
+     * lets gameplay objects apply the effect without caring which of the two is selected.
+     *
+     * @return The active {@link ModObjectScaleTween}, or {@code null} if neither is enabled.
+     */
+    public static ModObjectScaleTween getObjectScaleTween() {
+        return grow != null ? grow : deflate;
+    }
+
+    /**
+     * Whether a hit object scale tween mod (Grow or Deflate) is active.
+     */
+    public static boolean isObjectScaleTween() {
+        return getObjectScaleTween() != null;
     }
 
     public static ModScoreV2 getScoreV2() {

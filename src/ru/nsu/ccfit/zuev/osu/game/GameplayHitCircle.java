@@ -13,6 +13,7 @@ import com.osudroid.beatmaps.constants.HitObjectType;
 import com.osudroid.beatmaps.hitobjects.HitCircle;
 import com.osudroid.game.GameplayHitSampleInfo;
 import com.osudroid.mods.ModHidden;
+import com.osudroid.mods.ModObjectScaleTween;
 
 import java.util.ArrayList;
 
@@ -75,6 +76,9 @@ public class GameplayHitCircle extends GameObject {
         float scale = beatmapCircle.getScreenSpaceGameplayScale();
         float fadeInDuration = (float) beatmapCircle.timeFadeIn / 1000f;
 
+        // Grow and Deflate are mutually incompatible, so at most one of these can be active.
+        final ModObjectScaleTween scaleTween = GameHelper.getObjectScaleTween();
+
         // Initializing sprites
         circlePiece.setCircleColor(comboColor);
         circlePiece.setScale(scale);
@@ -95,8 +99,11 @@ public class GameplayHitCircle extends GameObject {
         approachCircle.setScale(scale * 3 * (float) (beatmapCircle.timePreempt / GameHelper.getOriginalTimePreempt()));
         approachCircle.setAlpha(0);
         approachCircle.setPosition(this.position.x, this.position.y);
-        approachCircle.setVisible(!GameHelper.isHidden() ||
-                (Config.isShowFirstApproachCircle() && GameHelper.getHidden().getFirstObject() == beatmapCircle));
+
+        // Grow and Deflate hide the approach circle, since judging the size of the object is the
+        // whole point of them. This mirrors IHidesApproachCircles in osu!lazer.
+        approachCircle.setVisible(scaleTween == null && (!GameHelper.isHidden() ||
+                (Config.isShowFirstApproachCircle() && GameHelper.getHidden().getFirstObject() == beatmapCircle)));
 
         approachCircle.setTextureRegion(ResourceManager.getInstance().getTexture(
                 GameHelper.isTraceable() ? "defaultapproachcircle" : "approachcircle"));
@@ -114,6 +121,19 @@ public class GameplayHitCircle extends GameObject {
                 sequence.then().fadeOut(fadeOutDuration);
             }
         });
+
+        // The circle starts off at a different size and settles on its normal size exactly as it
+        // becomes hittable.
+        //
+        // This is deliberately registered as its own sequence rather than being chained onto the
+        // fade sequence above: appending it there would make Hidden's .then() fade out wait for the
+        // full preempt duration instead of the fade in, throwing off its timing.
+        if (scaleTween != null) {
+            circlePiece.setScale(scale * scaleTween.getStartScale());
+
+            circlePiece.beginAbsoluteSequence(initialModifierTime, sequence -> sequence
+                    .scaleTo(scale * scaleTween.getEndScale(), timePreempt, Easing.OutCubic));
+        }
 
         if (!fadeOutCircle && circlePiece.isVisible()) {
             float okWindow = (float) beatmapCircle.hitWindow.getOkWindow() / 1000;
