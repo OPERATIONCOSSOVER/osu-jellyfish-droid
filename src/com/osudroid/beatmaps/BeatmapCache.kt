@@ -24,6 +24,7 @@ object BeatmapCache {
     private val lock = ReentrantLock()
     private val droidCache = LRUCache<String, CachedBeatmap>(MAX_SIZE)
     private val standardCache = LRUCache<String, CachedBeatmap>(MAX_SIZE)
+    private val taikoCache = LRUCache<String, CachedBeatmap>(MAX_SIZE)
 
     /**
      * Obtains a [Beatmap] from the cache, or parses it if it is not present.
@@ -102,6 +103,7 @@ object BeatmapCache {
     fun invalidate(md5: String): Unit = lock.withLock {
         droidCache.remove(md5)
         standardCache.remove(md5)
+        taikoCache.remove(md5)
     }
 
     /**
@@ -122,6 +124,7 @@ object BeatmapCache {
         beatmapSetInfo.beatmaps.forEach {
             droidCache.remove(it.md5)
             standardCache.remove(it.md5)
+            taikoCache.remove(it.md5)
         }
     }
 
@@ -132,6 +135,7 @@ object BeatmapCache {
     fun clear() = lock.withLock {
         droidCache.clear()
         standardCache.clear()
+        taikoCache.clear()
     }
 
     private fun getBeatmap(md5: String, withHitObjects: Boolean, mode: GameMode, scope: CoroutineScope?): Beatmap? {
@@ -142,6 +146,10 @@ object BeatmapCache {
                 val otherModeCache = when (mode) {
                     GameMode.Droid -> standardCache
                     GameMode.Standard -> droidCache
+
+                    // osu!taiko beatmaps are converted from osu!standard content, so the standard cache is
+                    // the useful sibling to fall back on.
+                    GameMode.Taiko -> standardCache
                 }
 
                 cache = otherModeCache[md5]
@@ -209,6 +217,7 @@ object BeatmapCache {
     private fun getCacheFor(mode: GameMode) = when (mode) {
         GameMode.Droid -> droidCache
         GameMode.Standard -> standardCache
+        GameMode.Taiko -> taikoCache
     }
 
     private data class CachedBeatmap(val beatmap: Beatmap, val withHitObjects: Boolean)
