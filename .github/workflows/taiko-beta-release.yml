@@ -12,15 +12,15 @@ on:
       ref:
         description: "Branch, tag or commit to build"
         required: true
-        default: "release/taiko-beta.4"
+        default: "master"
       tag:
         description: "Release tag"
         required: true
-        default: "20260727-taiko-beta.11"
+        default: "20260727-taiko-beta.12"
       title:
         description: "Release title"
         required: true
-        default: "osu!jellyfish Taiko Beta 11"
+        default: "osu!jellyfish Taiko Beta 12"
 
 permissions:
   contents: write
@@ -75,22 +75,25 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          ## osu!jellyfish Taiko Beta 11
+          ## osu!jellyfish Taiko Beta 12
 
-          ### Fixed
+          ### Added
 
-          - The main menu no longer crashes when the osu! theme song starts playing. The
-            `timingControlPoints` and `effectControlPoints` fields are now null-checked before
-            calling `.isEmpty()` in `MainScene.onUpdate`, preventing a `NullPointerException`
-            that occurred because these fields are not initialized until a beatmap is loaded.
+          - **Custom intro theme from an .osz file.** Settings now has a "Choose theme .osz"
+            option that lets you pick any .osz as the main-menu theme song instead of relying on
+            the bundled theme. The file is copied into the app's own storage, so moving or
+            deleting the original does not break it, and it is extracted outside the Songs
+            folder so it never shows up as a playable beatmap. "Reset theme song" restores the
+            bundled circles! theme.
+          - **Seasonal effects toggle.** A new "Seasonal effects" switch controls seasonal
+            theming. During Halloween (all of October plus November 1-2) the main-menu
+            visualiser bars and the glowing corner star bursts are tinted orange.
 
-          ### Carried over from Beta 10
+          ### Notes
 
-          - The osu! theme song (circles! by nekodex) plays on the main menu.
-          - Offline mode: no login, score submission, online leaderboards, or update checks.
-          - Seasonal backgrounds advance when returning to the main menu or changing songs.
-          - Taiko hitsounds: don uses `hitnormal`; kat uses `hitclap`; big don uses `hitnormal` +
-            `hitfinish`; big kat uses `hitwhistle` + `hitfinish`.
+          - The corner star bursts pick up the Halloween tint on the next app launch, because
+            their colour is applied when the menu scene is first built. The visualiser bars
+            update immediately.
           EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
