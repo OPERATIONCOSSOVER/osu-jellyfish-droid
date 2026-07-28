@@ -24,6 +24,7 @@ import com.osudroid.game.GameplayHitSampleInfo;
 import com.osudroid.game.GameplaySequenceHitSampleInfo;
 import com.osudroid.math.Precision;
 import com.osudroid.mods.ModHidden;
+import com.osudroid.mods.ModObjectScaleTween;
 import com.osudroid.mods.ModSynesthesia;
 import com.osudroid.ui.v2.game.SliderTickSprite;
 import com.osudroid.ui.v2.game.CirclePiece;
@@ -212,6 +213,7 @@ public class GameplaySlider extends GameObject {
 
         float initialModifierTime = hitTime - timePreempt;
         float scale = beatmapSlider.getScreenSpaceGameplayScale();
+        final ModObjectScaleTween scaleTween = GameHelper.getObjectScaleTween(listener);
 
         isOver = false;
         isInRadius = false;
@@ -263,8 +265,8 @@ public class GameplaySlider extends GameObject {
         approachCircle.setScale(scale * 3 * (float) (beatmapSlider.timePreempt / GameHelper.getOriginalTimePreempt()));
         approachCircle.setAlpha(0);
         approachCircle.setPosition(this.position.x, this.position.y);
-        approachCircle.setVisible(!GameHelper.isHidden() ||
-                (Config.isShowFirstApproachCircle() && GameHelper.getHidden().getFirstObject() == beatmapSlider));
+        approachCircle.setVisible(scaleTween == null && (!GameHelper.isHidden() ||
+                (Config.isShowFirstApproachCircle() && GameHelper.getHidden().getFirstObject() == beatmapSlider)));
 
         approachCircle.setTextureRegion(ResourceManager.getInstance().getTexture(
                 GameHelper.isTraceable() ? "defaultapproachcircle" : "approachcircle"));
@@ -376,6 +378,13 @@ public class GameplaySlider extends GameObject {
                     .fadeTo(0.9f, Math.min(headFadeIn * 2, timePreempt))
                     .scaleTo(scale, timePreempt, easing)
                     .after(e -> e.setAlpha(0)));
+        }
+
+        if (scaleTween != null) {
+            applyScaleTween(headCirclePiece, scaleTween, scale, initialModifierTime);
+            applyScaleTween(tailCirclePiece, scaleTween, scale, initialModifierTime);
+            applyScaleTween(startArrow, scaleTween, scale, initialModifierTime);
+            applyScaleTween(endArrow, scaleTween, scale, initialModifierTime);
         }
 
         // Slider track
@@ -1347,6 +1356,36 @@ public class GameplaySlider extends GameObject {
 
     private void playCurrentNestedObjectHitSound() {
         listener.playHitSamples(nestedHitSamples.get(currentNestedObjectIndex));
+    }
+
+    /**
+     * Applies the Grow/Deflate scale tween to a single slider piece.
+     * <p>
+     * osu!lazer scales the whole slider drawable at once, which cascades to every nested piece. This
+     * ruleset attaches each piece to the scene independently, so each one has to be tweened on its
+     * own. The slider body is deliberately excluded: its thickness comes from the skin's body width
+     * rather than an entity scale, and scaling the generated path mesh would drag the track away
+     * from the head and tail instead of shrinking it toward them.
+     * <p>
+     * Pieces that were never attached (the repeat arrows on sliders without enough spans) are
+     * skipped, since a modifier on a detached entity would never advance and would leave a stale
+     * scale behind when the pool reuses this slider.
+     *
+     * @param piece The piece to tween.
+     * @param scaleTween The active scale tween mod.
+     * @param scale The slider's normal gameplay scale.
+     * @param initialModifierTime The time at which the object starts appearing, in seconds.
+     */
+    private void applyScaleTween(final UIComponent piece, final ModObjectScaleTween scaleTween,
+                                 final float scale, final float initialModifierTime) {
+        if (!piece.hasParent()) {
+            return;
+        }
+
+        piece.setScale(scale * scaleTween.getStartScale());
+
+        piece.beginAbsoluteSequence(initialModifierTime, sequence -> sequence
+                .scaleTo(scale * scaleTween.getEndScale(), timePreempt, Easing.OutCubic));
     }
 
     private void applyDim(UIComponent piece) {
