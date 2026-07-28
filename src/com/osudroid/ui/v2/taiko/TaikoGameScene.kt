@@ -44,8 +44,7 @@ import com.reco1l.andengine.sprite.ScaleType
 import com.reco1l.andengine.sprite.UIAnimatedSprite
 import com.reco1l.andengine.text
 import com.reco1l.andengine.text.UIText
-import com.reco1l.andengine.textButton
-import com.reco1l.andengine.ui.UITextButton
+import com.reco1l.andengine.ui.UIMessageDialog
 import com.reco1l.framework.Color4
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -151,10 +150,52 @@ class TaikoGameScene private constructor(
     private lateinit var songIntro: UIContainer
     private val judgementText: UIText
     private lateinit var loadingText: UIText
-    private val modal: UIContainer
-    private lateinit var modalTitle: UIText
-    private lateinit var primaryButton: UITextButton
-    private lateinit var restartButton: UITextButton
+
+    /**
+     * The pause menu, built on the same shared dialog component the rest of the game uses rather
+     * than a bespoke container, so it matches the standard pause presentation and picks up the
+     * app's theme, backdrop and show/hide animations for free.
+     */
+    private val pauseDialog = UIMessageDialog().apply {
+        // A stray tap outside the card must not silently resume a paused run.
+        staticBackdrop = true
+        title = "osu!taiko (BETA)"
+        text = "Paused\n\nBeta scores are kept separate and are not uploaded."
+
+        addButton {
+            text = "Resume"
+            isSelected = true
+            onActionUp = { this@TaikoGameScene.resume() }
+        }
+
+        addButton {
+            text = "Restart"
+            onActionUp = { this@TaikoGameScene.restart() }
+        }
+
+        addButton {
+            text = "Exit to songs"
+            onActionUp = { this@TaikoGameScene.exitToSongMenu() }
+        }
+    }
+
+    /** Shown when the beatmap cannot be parsed or its audio cannot be loaded. */
+    private val loadFailedDialog = UIMessageDialog().apply {
+        staticBackdrop = true
+        title = "osu!taiko (BETA)"
+        text = "Could not load this osu!taiko map."
+
+        addButton {
+            text = "Try again"
+            isSelected = true
+            onActionUp = { this@TaikoGameScene.restart() }
+        }
+
+        addButton {
+            text = "Exit to songs"
+            onActionUp = { this@TaikoGameScene.exitToSongMenu() }
+        }
+    }
 
     private var objects = emptyList<TaikoObject>()
     /** Notes before this index are all judged, so scanning can start here. */
@@ -445,67 +486,6 @@ class TaikoGameScene private constructor(
             }
         }
 
-        modal = container {
-            x = screenWidth / 2f - 275f
-            y = screenHeight / 2f - 190f
-            width = 550f
-            height = 380f
-            isVisible = false
-
-            background = UIBox().apply {
-                cornerRadius = 20f
-                color = Color4(0xFF202033)
-                alpha = 0.98f
-            }
-
-            modalTitle = text {
-                x = 30f
-                y = 34f
-                width = 490f
-                alignment = Anchor.TopCenter
-                font = resources.getFont("middleFont")
-                text = "osu!taiko (BETA)\nPaused"
-            }
-
-            primaryButton = textButton {
-                x = 35f
-                y = 178f
-                width = 480f
-                height = 54f
-                text = "Resume"
-                onActionUp = { resume() }
-            }
-
-            restartButton = textButton {
-                x = 35f
-                y = 244f
-                width = 232f
-                height = 54f
-                text = "Restart"
-                onActionUp = { restart() }
-            }
-
-            textButton {
-                x = 283f
-                y = 244f
-                width = 232f
-                height = 54f
-                text = "Exit to songs"
-                onActionUp = { exitToSongMenu() }
-            }
-
-            text {
-                x = 35f
-                y = 320f
-                width = 480f
-                alignment = Anchor.TopCenter
-                font = resources.getFont("smallFont")
-                color = Color4(0xFFFF80AB)
-                text = "Beta scores are kept separate and are not uploaded."
-            }
-        }
-        hideModal()
-
         if (!isAutoPlay) {
             setOnSceneTouchListener { _, event -> handleTouch(event) }
         }
@@ -636,11 +616,10 @@ class TaikoGameScene private constructor(
 
                 Log.e("TaikoGameScene", "Failed to load osu!taiko beta gameplay", e)
                 updateThread {
-                    loadingText.text = "Could not load this osu!taiko map.\n${e.message.orEmpty()}"
-                    modalTitle.text = "osu!taiko (BETA)\nLoad failed"
-                    primaryButton.isVisible = false
-                    restartButton.text = "Try again"
-                    showModal()
+                    val reason = "Could not load this osu!taiko map.\n${e.message.orEmpty()}"
+                    loadingText.text = reason
+                    loadFailedDialog.text = reason
+                    loadFailedDialog.show()
                 }
             }
         }
@@ -1212,10 +1191,20 @@ class TaikoGameScene private constructor(
         explosionTimeRemaining = EXPLOSION_DURATION
     }
 
-    /** Judged as a hit: the note drifts up and away toward the health bar while fading. */
+    /**
+     * Judged as a hit: the note snaps onto the judgement circle and flies up and away almost
+     * immediately, the way osu!stable does it.
+     *
+     * Snapping matters as much as the speed here. Without it the note peels away from wherever it
+     * happened to be when the input landed, which at high scroll speeds reads as a smear trailing
+     * behind the drum; stable always launches the note from the centre of the target instead.
+     */
     private fun releaseHit(obj: TaikoObject) {
         obj.judged = true
         obj.entity?.let { entity ->
+            entity.x = targetX - entity.width / 2f
+            entity.y = laneY - entity.height / 2f
+
             decayingEntities.add(
                 DecayingEntity(
                     entity,
@@ -1294,14 +1283,7 @@ class TaikoGameScene private constructor(
         if (songHasStarted) {
             songService.pause()
         }
-        modalTitle.text = "osu!taiko (BETA)\nPaused"
-        primaryButton.apply {
-            isVisible = true
-            text = "Resume"
-            onActionUp = { resume() }
-        }
-        restartButton.isVisible = true
-        showModal()
+        pauseDialog.show()
     }
 
     fun togglePause() {
@@ -1327,7 +1309,7 @@ class TaikoGameScene private constructor(
             return
         }
 
-        hideModal()
+        pauseDialog.hide()
         isPaused = false
         if (songHasStarted) {
             songService.play()
@@ -1376,18 +1358,9 @@ class TaikoGameScene private constructor(
         global.engine.scene = scoring.scene
     }
 
-    private fun showModal() {
-        modal.x = screenWidth / 2f - 275f
-        modal.isVisible = true
-    }
-
-    private fun hideModal() {
-        // Invisible UI containers still participate in legacy AndEngine touch traversal.
-        modal.isVisible = false
-        modal.x = screenWidth + 1000f
-    }
-
     private fun restart() {
+        pauseDialog.hide()
+        loadFailedDialog.hide()
         cleanup()
         start(beatmapInfo, mods)
     }
@@ -1399,6 +1372,8 @@ class TaikoGameScene private constructor(
     }
 
     fun exitToSongMenu() {
+        pauseDialog.hide()
+        loadFailedDialog.hide()
         cleanup()
         val songMenu = global.songMenu
         global.engine.scene = songMenu.scene
@@ -1483,9 +1458,13 @@ class TaikoGameScene private constructor(
         private const val JUDGEMENT_DURATION = 0.35f
         private const val JUDGEMENT_DRIFT = 18f
 
-        private const val HIT_DECAY_DURATION = 0.4f
-        private const val HIT_DECAY_VELOCITY_X = -180f
-        private const val HIT_DECAY_VELOCITY_Y = -260f
+        /**
+         * Hit notes clear almost instantly, as in osu!stable. The old 0.4s drift left struck notes
+         * lingering over the lane and made dense patterns hard to read.
+         */
+        private const val HIT_DECAY_DURATION = 0.12f
+        private const val HIT_DECAY_VELOCITY_X = -90f
+        private const val HIT_DECAY_VELOCITY_Y = -1150f
         private const val MISS_DECAY_DURATION = 0.22f
 
         /** Autoplay tap intervals, in milliseconds to match song position units. */
