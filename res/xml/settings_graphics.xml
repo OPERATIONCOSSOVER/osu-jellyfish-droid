@@ -64,10 +64,31 @@
 
         <CheckBoxPreference
             android:defaultValue="true"
+            android:key="seasonalEffects"
+            android:summary="Tint the main menu for the current season. During Halloween the spectrum around the osu! cookie and the glowing corners turn orange"
+            android:title="Seasonal effects"
+            app:layout="@layout/settings_preference_checkbox" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
             android:key="themeSong"
             android:summary="Play the osu! theme song on the main menu"
             android:title="Theme song"
             app:layout="@layout/settings_preference_checkbox" />
+
+        <Preference
+            android:dependency="themeSong"
+            android:key="themeSongCustom"
+            android:summary="Using the bundled theme"
+            android:title="Choose theme .osz"
+            app:layout="@layout/settings_preference" />
+
+        <Preference
+            android:dependency="themeSong"
+            android:key="themeSongCustomClear"
+            android:summary="Go back to the theme that ships with the game"
+            android:title="Reset theme song"
+            app:layout="@layout/settings_preference" />
 
     </PreferenceCategory>
 

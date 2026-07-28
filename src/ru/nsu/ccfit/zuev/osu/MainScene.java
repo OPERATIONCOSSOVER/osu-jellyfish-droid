@@ -22,6 +22,7 @@ import com.osudroid.ui.BannerManager.BannerSprite;
 import com.osudroid.data.BeatmapInfo;
 import com.osudroid.ui.MainMenu;
 import com.osudroid.ui.SeasonalBackgroundManager;
+import com.osudroid.ui.SeasonalThemeManager;
 import com.osudroid.ui.ThemeSongManager;
 
 import com.osudroid.beatmaplisting.BeatmapListing;
@@ -41,6 +42,7 @@ import org.anddev.andengine.entity.modifier.SequenceEntityModifier;
 import org.anddev.andengine.entity.particle.ParticleSystem;
 import org.anddev.andengine.entity.particle.emitter.PointParticleEmitter;
 import org.anddev.andengine.entity.particle.initializer.AccelerationInitializer;
+import org.anddev.andengine.entity.particle.initializer.ColorInitializer;
 import org.anddev.andengine.entity.particle.initializer.RotationInitializer;
 import org.anddev.andengine.entity.particle.initializer.VelocityInitializer;
 import org.anddev.andengine.entity.particle.modifier.AlphaModifier;
@@ -273,12 +275,19 @@ public class MainScene implements IUpdateHandler {
 
         TextureRegion starRegion = ResourceManager.getInstance().getTexture("star");
 
+        // Resolved once so both corner bursts spawn stars in the same accent. The spectrum is
+        // handled separately below because it can be recoloured without respawning anything.
+        final float[] seasonalAccent = SeasonalThemeManager.getAccentColor();
+
         {
             particleSystem[0] = new ParticleSystem(new PointParticleEmitter(-40, (float) (Config.getRES_HEIGHT() * 3) / 4), 32, 48, 128, starRegion);
             particleSystem[0].setBlendFunction(GL10.GL_SRC_ALPHA, GL10.GL_ONE_MINUS_SRC_ALPHA);
             particleSystem[0].addParticleInitializer(new VelocityInitializer(150, 430, -480, -520));
             particleSystem[0].addParticleInitializer(new AccelerationInitializer(10, 30));
             particleSystem[0].addParticleInitializer(new RotationInitializer(0.0f, 360.0f));
+            if (seasonalAccent != null) {
+                particleSystem[0].addParticleInitializer(new ColorInitializer(seasonalAccent[0], seasonalAccent[1], seasonalAccent[2]));
+            }
             particleSystem[0].addParticleModifier(new ScaleModifier(0.5f, 2.0f, 0.0f, 1.0f));
             particleSystem[0].addParticleModifier(new AlphaModifier(1.0f, 0.0f, 0.0f, 1.0f));
             particleSystem[0].addParticleModifier(new ExpireModifier(1.0f));
@@ -292,6 +301,9 @@ public class MainScene implements IUpdateHandler {
             particleSystem[1].addParticleInitializer(new VelocityInitializer(-150, -430, -480, -520));
             particleSystem[1].addParticleInitializer(new AccelerationInitializer(-10, 30));
             particleSystem[1].addParticleInitializer(new RotationInitializer(0.0f, 360.0f));
+            if (seasonalAccent != null) {
+                particleSystem[1].addParticleInitializer(new ColorInitializer(seasonalAccent[0], seasonalAccent[1], seasonalAccent[2]));
+            }
             particleSystem[1].addParticleModifier(new ScaleModifier(0.5f, 2.0f, 0.0f, 1.0f));
             particleSystem[1].addParticleModifier(new AlphaModifier(1.0f, 0.0f, 0.0f, 1.0f));
             particleSystem[1].addParticleModifier(new ExpireModifier(1.0f));
@@ -366,10 +378,33 @@ public class MainScene implements IUpdateHandler {
         progressBar.setProgressRectColor(new Color4(0.9f, 0.9f, 0.9f));
         progressBar.setProgressRectAlpha(0.8f);
 
+        applySeasonalAccent();
+
         createOnlinePanel(scene);
         scene.registerUpdateHandler(this);
 
         hitsound = ResourceManager.getInstance().loadSound("menuhit", "sfx/menuhit.ogg", false);
+    }
+
+    /**
+     * Recolours the spectrum radiating out of the osu! cookie to the accent of whatever season is
+     * running, falling back to white when nothing is in season or the setting is off.
+     *
+     * Only the colour is touched, never the alpha, which the spectrum animates itself every frame.
+     * This runs again whenever settings are reapplied so the toggle takes effect straight away.
+     */
+    private void applySeasonalAccent() {
+        final float[] accent = SeasonalThemeManager.getAccentColor();
+
+        for (final Rectangle bar : spectrum) {
+            if (bar == null) { continue; }
+
+            if (accent != null) {
+                bar.setColor(accent[0], accent[1], accent[2]);
+            } else {
+                bar.setColor(1f, 1f, 1f);
+            }
+        }
     }
 
     private TextureRegion getMenuBackgroundTexture() {
@@ -631,6 +666,8 @@ public class MainScene implements IUpdateHandler {
     }
 
     public void loadTimingPoints(boolean reloadMusic) {
+        // Reapplied here so toggling the seasonal setting is picked up as soon as settings close.
+        applySeasonalAccent();
         if (beatmapInfo == null) { return; }
         for (ParticleSystem particleSpout : particleSystem) { particleSpout.setParticlesSpawnEnabled(false); }
         particleEnabled = false;
@@ -737,6 +774,7 @@ public class MainScene implements IUpdateHandler {
     public void show() {
         GlobalManager.getInstance().getSongService().setGaming(false);
         GlobalManager.getInstance().getEngine().setScene(getScene());
+        applySeasonalAccent();
         if (GlobalManager.getInstance().getSelectedBeatmap() != null) {
             setBeatmap(GlobalManager.getInstance().getSelectedBeatmap());
         }
