@@ -3,6 +3,7 @@ package com.osudroid.data
 import android.util.*
 import androidx.room.*
 import com.osudroid.difficulty.BeatmapDifficultyCalculator
+import com.osudroid.difficulty.calculator.TaikoDifficultyCalculator
 import ru.nsu.ccfit.zuev.osu.Config
 import ru.nsu.ccfit.zuev.osu.DifficultyAlgorithm
 import ru.nsu.ccfit.zuev.osu.DifficultyAlgorithm.*
@@ -217,6 +218,14 @@ data class BeatmapInfo(
     @ColumnInfo(defaultValue = "0")
     var beatmapMode: Int = 0,
 
+    /**
+     * The cached osu!taiko star rating.
+     *
+     * Only calculated for beatmaps whose [beatmapMode] is `1`.
+     * Do not use this value directly, use [getStarRating] instead.
+     */
+    var taikoStarRating: Float? = null,
+
 ) {
 
     /**
@@ -264,10 +273,21 @@ data class BeatmapInfo(
         get() = if (Config.isForceRomanized()) artist else artistUnicode.takeUnless { it.isBlank() } ?: artist
 
     /**
+     * Whether this beatmap is a native osu!taiko beatmap.
+     */
+    val isTaiko
+        get() = beatmapMode == 1
+
+    /**
      * Whether the beatmap needs a difficulty calculation.
      */
     val needsDifficultyCalculation
-        get() = beatmapMode == 0 && (droidStarRating == null || standardStarRating == null)
+        get() = when {
+            isTaiko -> taikoStarRating == null
+            beatmapMode == 0 -> droidStarRating == null || standardStarRating == null
+            // Rulesets that the game cannot describe at all are never calculated.
+            else -> false
+        }
 
     /**
      * The full name of the beatmapset containing this beatmap without taking romanization into account.
@@ -309,12 +329,21 @@ data class BeatmapInfo(
      * Returns the star rating based on the current algorithm configuration, whether droid or standard.
      * Optionally, you can pass a custom algorithm to get the star rating.
      *
+     * Native osu!taiko beatmaps always return their osu!taiko star rating, as the droid and standard
+     * algorithms do not describe them.
+     *
      * Returns 0 if the star rating has not been calculated.
      */
     @JvmOverloads
-    fun getStarRating(algorithm: DifficultyAlgorithm = Config.getDifficultyAlgorithm()) = when(algorithm) {
-        droid -> droidStarRating ?: 0f
-        standard -> standardStarRating ?: 0f
+    fun getStarRating(algorithm: DifficultyAlgorithm = Config.getDifficultyAlgorithm()): Float {
+        if (isTaiko) {
+            return taikoStarRating ?: 0f
+        }
+
+        return when (algorithm) {
+            droid -> droidStarRating ?: 0f
+            standard -> standardStarRating ?: 0f
+        }
     }
 
     fun apply(b: BeatmapInfo) {
@@ -340,6 +369,7 @@ data class BeatmapInfo(
         hpDrainRate = b.hpDrainRate
         droidStarRating = b.droidStarRating
         standardStarRating = b.standardStarRating
+        taikoStarRating = b.taikoStarRating
         bpmMax = b.bpmMax
         bpmMin = b.bpmMin
         length = b.length
@@ -434,11 +464,28 @@ data class BeatmapInfo(
 fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean, scope: CoroutineScope? = null): BeatmapInfo {
     var droidStarRating: Float? = null
     var standardStarRating: Float? = null
+    var taikoStarRating: Float? = null
 
     if (data.general.mode == 1) {
         // osu!standard difficulty calculators do not describe native osu!taiko maps.
         droidStarRating = 0f
         standardStarRating = 0f
+
+        if (calculateDifficulty) {
+            try {
+                val taikoAttributes = TaikoDifficultyCalculator().calculate(data, scope = scope)
+
+                taikoStarRating = GameHelper.Round(taikoAttributes.starRating, 2)
+            } catch (e: Exception) {
+                if (e is CancellationException) {
+                    throw e
+                }
+
+                Log.e("BeatmapInfo", "Error while calculating osu!taiko difficulty.", e)
+
+                taikoStarRating = 0f
+            }
+        }
     } else if (calculateDifficulty) {
         try {
             val droidAttributes = BeatmapDifficultyCalculator.calculateDroidDifficulty(data, scope = scope)
@@ -493,6 +540,7 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
         hpDrainRate = data.difficulty.hp,
         droidStarRating = droidStarRating,
         standardStarRating = standardStarRating,
+        taikoStarRating = taikoStarRating,
         // These will be calculated in the apply call below
         bpmMin = 0f,
         bpmMax = 0f,
@@ -525,6 +573,9 @@ fun BeatmapInfo(data: Beatmap, lastModified: Long, calculateDifficulty: Boolean,
 
     @Query("UPDATE BeatmapInfo SET standardStarRating = null")
     fun resetStandardStarRatings()
+
+    @Query("UPDATE BeatmapInfo SET taikoStarRating = null")
+    fun resetTaikoStarRatings()
 
     @Query("DELETE FROM BeatmapInfo WHERE setDirectory = :directory")
     fun deleteBeatmapSet(directory: String)

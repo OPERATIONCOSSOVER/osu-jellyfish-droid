@@ -10,6 +10,7 @@ import com.osudroid.utils.stopAsync
 import com.osudroid.beatmaps.parser.BeatmapParser
 import com.osudroid.difficulty.calculator.DroidDifficultyCalculator
 import com.osudroid.difficulty.calculator.StandardDifficultyCalculator
+import com.osudroid.difficulty.calculator.TaikoDifficultyCalculator
 import java.util.concurrent.CompletableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -55,6 +56,13 @@ object DifficultyCalculationManager {
                 editor.putLong("standardStarRatingVersion", StandardDifficultyCalculator.VERSION)
             }
 
+            // The taiko rating is versioned on its own, so changing it does not invalidate every other beatmap
+            // in the library. It has no legacy key to fall back to, as it did not exist back then.
+            if (getLong("taikoStarRatingVersion", 0) < TaikoDifficultyCalculator.VERSION) {
+                DatabaseManager.beatmapInfoTable.resetTaikoStarRatings()
+                editor.putLong("taikoStarRatingVersion", TaikoDifficultyCalculator.VERSION)
+            }
+
             editor.apply()
         }
     }
@@ -87,6 +95,7 @@ object DifficultyCalculationManager {
             val threadPool = Executors.newFixedThreadPool(threadCount)
             val droidCalculator = DroidDifficultyCalculator()
             val standardCalculator = StandardDifficultyCalculator()
+            val taikoCalculator = TaikoDifficultyCalculator()
 
             var calculated = totalBeatmaps - pendingBeatmaps.size
 
@@ -111,14 +120,23 @@ object DifficultyCalculationManager {
 
                                     beatmapInfo.apply(beatmap, this)
 
-                                    if (beatmapInfo.droidStarRating == null) {
-                                        val attributes = droidCalculator.calculate(beatmap, scope = this)
-                                        beatmapInfo.droidStarRating = attributes.starRating.toFloat()
-                                    }
+                                    if (beatmapInfo.isTaiko) {
+                                        // The osu!droid and osu!standard calculators do not describe a taiko map,
+                                        // so only the taiko rating is meaningful here.
+                                        if (beatmapInfo.taikoStarRating == null) {
+                                            val attributes = taikoCalculator.calculate(beatmap, scope = this)
+                                            beatmapInfo.taikoStarRating = attributes.starRating.toFloat()
+                                        }
+                                    } else {
+                                        if (beatmapInfo.droidStarRating == null) {
+                                            val attributes = droidCalculator.calculate(beatmap, scope = this)
+                                            beatmapInfo.droidStarRating = attributes.starRating.toFloat()
+                                        }
 
-                                    if (beatmapInfo.standardStarRating == null) {
-                                        val attributes = standardCalculator.calculate(beatmap, scope = this)
-                                        beatmapInfo.standardStarRating = attributes.starRating.toFloat()
+                                        if (beatmapInfo.standardStarRating == null) {
+                                            val attributes = standardCalculator.calculate(beatmap, scope = this)
+                                            beatmapInfo.standardStarRating = attributes.starRating.toFloat()
+                                        }
                                     }
 
                                     DatabaseManager.beatmapInfoTable.update(beatmapInfo)

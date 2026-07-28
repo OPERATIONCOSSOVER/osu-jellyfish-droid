@@ -108,7 +108,10 @@ open class Beatmap(mode: GameMode) : IBeatmap, Cloneable {
                     // combo.
                     val minRps = when (mode) {
                         GameMode.Droid -> 2 + 2 * nonRateAdjustedDifficulty.od / 10.0
-                        GameMode.Standard -> BeatmapDifficulty.difficultyRange(
+
+                        // A spinner becomes a swell in osu!taiko, whose required hits scale with the overall
+                        // difficulty on the same curve osu!standard uses for rotations.
+                        GameMode.Standard, GameMode.Taiko -> BeatmapDifficulty.difficultyRange(
                             nonRateAdjustedDifficulty.od.toDouble(), 90.0, 150.0, 225.0
                         ) / 60.0
                     }
@@ -153,6 +156,20 @@ open class Beatmap(mode: GameMode) : IBeatmap, Cloneable {
         mods: Iterable<Mod>? = null,
         scope: CoroutineScope? = null
     ) = StandardPlayableBeatmap(convert(GameMode.Standard, mods, scope), mods)
+
+    /**
+     * Constructs a [TaikoPlayableBeatmap] from this [Beatmap], where all [HitObject] and [BeatmapDifficulty]
+     * [Mod]s have been applied, and [HitObject]s have been fully constructed.
+     *
+     * @param mods The [Mod]s to apply to the [Beatmap]. Defaults to No Mod.
+     * @param scope The [CoroutineScope] to use for coroutines.
+     * @return The [TaikoPlayableBeatmap].
+     */
+    @JvmOverloads
+    fun createTaikoPlayableBeatmap(
+        mods: Iterable<Mod>? = null,
+        scope: CoroutineScope? = null
+    ) = TaikoPlayableBeatmap(convert(GameMode.Taiko, mods, scope), mods)
 
     /**
      * Converts this [Beatmap] to another [Beatmap] for the specified [GameMode], where all [HitObject] and
