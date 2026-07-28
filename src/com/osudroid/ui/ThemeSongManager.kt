@@ -56,7 +56,22 @@ object ThemeSongManager {
 
     private val AUDIO_EXTENSIONS = arrayOf(".mp3", ".ogg", ".wav", ".m4a", ".aac", ".flac")
 
+    /** Cap on how many names a diagnostic listing prints, so a huge .osz cannot flood the log. */
+    private const val MAX_LISTED_FILES = 40
+
     private var audioPath: String? = null
+
+    /**
+     * Whether resolution has already been attempted this session.
+     *
+     * Without this a failed extraction would leave [audioPath] null, and because [isActive] is
+     * polled from the menu's update loop the whole .osz would be unzipped again on every single
+     * frame. It also keeps the failure notice below to one toast rather than hundreds.
+     */
+    private var resolveAttempted = false
+
+    /** Why the custom theme could not be used, for display in settings. Null when all is well. */
+    private var lastFailureReason: String? = null
 
     /**
      * Intro metadata and timing, parsed lazily from the .osu sitting next to the theme audio.
@@ -104,14 +119,30 @@ object ThemeSongManager {
     }
 
     /**
+     * Why the picked .osz was rejected, or `null` if there was nothing wrong with it.
+     */
+    @JvmStatic
+    fun getLastFailureReason(): String? = lastFailureReason
+
+    /**
      * The absolute path of the .osz the player picked, or `null` when the bundled theme is in use.
-     * A path that no longer resolves to a file is treated as not set.
+     *
+     * A recorded path that no longer resolves to a file counts as not set. That used to happen
+     * silently, which looked exactly like the setting never having been applied, so it is called
+     * out here.
      */
     @JvmStatic
     fun getCustomOszPath(): String? {
         val path = Config.getString(CUSTOM_PREFERENCE_KEY, "") ?: return null
         if (path.isEmpty()) return null
-        return if (File(path).isFile) path else null
+
+        if (!File(path).isFile) {
+            Log.e(TAG, "A custom intro is recorded at " + path + " but no file is there; falling back to the bundled theme")
+            lastFailureReason = "The imported .osz is missing from " + path
+            return null
+        }
+
+        return path
     }
 
     /**
@@ -123,9 +154,22 @@ object ThemeSongManager {
     /**
      * Where a picked .osz should be copied to. Keeping it under the core path means the import
      * survives app restarts without holding on to a content URI permission.
+     *
+     * The Theme folder is created here. It is otherwise only ever created while extracting the
+     * bundled theme, so importing before that had happened wrote into a folder that did not exist:
+     * the copy failed, the preference was still set, and the game quietly kept using the bundled
+     * track.
      */
     @JvmStatic
-    fun getCustomOszDestination() = File(File(Config.getCorePath(), FOLDER_NAME), CUSTOM_OSZ_NAME)
+    fun getCustomOszDestination(): File {
+        val dir = themeDir()
+
+        if (!dir.exists() && !dir.mkdirs()) {
+            Log.e(TAG, "Could not create the theme folder at " + dir.absolutePath)
+        }
+
+        return File(dir, CUSTOM_OSZ_NAME)
+    }
 
     /**
      * Points the theme at [file] and drops whatever was extracted before, so the next launch picks
@@ -159,6 +203,8 @@ object ThemeSongManager {
     @JvmStatic
     fun invalidate() {
         audioPath = null
+        resolveAttempted = false
+        lastFailureReason = null
         introLoaded = false
         introLabel = null
         introTiming = emptyList()
@@ -167,14 +213,26 @@ object ThemeSongManager {
 
     /**
      * Extracts whichever .osz is in use if it has not been already, returning the absolute path of
-     * the audio file inside. Returns `null` if the .osz is missing or holds no usable audio.
+     * the audio file inside.
+     *
+     * A picked .osz that cannot be used no longer leaves the menu silent: the reason is reported
+     * and the bundled theme is used instead.
      */
     @JvmStatic
     fun ensureExtracted(): String? {
         audioPath?.let { return it }
 
+        // Only ever resolved once per session; see resolveAttempted.
+        if (resolveAttempted) return null
+        resolveAttempted = true
+
         val custom = getCustomOszPath()
-        val resolved = if (custom != null) extractCustom(custom) else extractBundled()
+
+        val resolved = if (custom != null) {
+            extractCustom(custom) ?: extractBundled()
+        } else {
+            extractBundled()
+        }
 
         audioPath = resolved
         return resolved
@@ -183,6 +241,39 @@ object ThemeSongManager {
     private fun themeDir() = File(Config.getCorePath(), FOLDER_NAME)
 
     private fun customDir() = File(Config.getCorePath(), CUSTOM_FOLDER_NAME)
+
+    /**
+     * Records why the picked theme was rejected and says so out loud.
+     *
+     * Every failure path used to return a bare null, so a corrupt archive, an unsupported audio
+     * format and a deleted file were indistinguishable from the outside: all three just played the
+     * bundled track.
+     */
+    private fun failCustom(reason: String, e: Exception? = null): String? {
+        lastFailureReason = reason
+
+        if (e != null) {
+            Log.e(TAG, reason, e)
+        } else {
+            Log.e(TAG, reason)
+        }
+
+        ToastLogger.showText("Custom intro theme: " + reason, true)
+        return null
+    }
+
+    /**
+     * Every file inside [folder], relative to it, for diagnosing a .osz that yielded no audio.
+     */
+    private fun listAllFiles(folder: File): List<String> {
+        if (!folder.isDirectory) return emptyList()
+
+        return folder.walkTopDown()
+            .filter { it.isFile }
+            .map { it.relativeTo(folder).path }
+            .take(MAX_LISTED_FILES)
+            .toList()
+    }
 
     /**
      * Extracts the .osz the player picked, reusing the previous extraction when the same file is
@@ -194,6 +285,14 @@ object ThemeSongManager {
         val marker = File(target, SOURCE_MARKER_NAME)
         val stamp = osz.absolutePath + "|" + osz.length() + "|" + osz.lastModified()
 
+        if (!osz.isFile) {
+            return failCustom("the imported file is no longer at " + osz.absolutePath)
+        }
+
+        if (osz.length() == 0L) {
+            return failCustom(osz.name + " is empty, so the import did not complete")
+        }
+
         if (marker.isFile && runCatching { marker.readText() }.getOrNull() == stamp) {
             findAudioFile(target, true)?.let { return it }
         }
@@ -202,21 +301,35 @@ object ThemeSongManager {
             if (target.exists()) target.deleteRecursively()
             target.mkdirs()
 
-            ZipFile(osz).extractAll(target.absolutePath)
+            try {
+                ZipFile(osz).extractAll(target.absolutePath)
+            } catch (e: Exception) {
+                return failCustom(osz.name + " could not be opened as a .osz archive", e)
+            }
 
             val resolved = findAudioFile(target, true)
 
             if (resolved == null) {
-                Log.e(TAG, "No audio found inside the picked theme " + osz.name)
-                return null
+                val contents = listAllFiles(target)
+
+                Log.e(TAG, "Contents of " + target.absolutePath + ": " + contents.joinToString())
+
+                return if (contents.isEmpty()) {
+                    failCustom(osz.name + " extracted to nothing at all")
+                } else {
+                    failCustom(
+                        "nothing in " + osz.name + " has a supported audio extension " +
+                            AUDIO_EXTENSIONS.joinToString() + "; it holds " + contents.joinToString()
+                    )
+                }
             }
 
             marker.writeText(stamp)
+            lastFailureReason = null
             Log.i(TAG, "Custom theme extracted to " + target.absolutePath + ", audio: " + resolved)
             return resolved
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to extract the picked theme .osz", e)
-            return null
+            return failCustom("could not extract " + osz.name, e)
         }
     }
 
