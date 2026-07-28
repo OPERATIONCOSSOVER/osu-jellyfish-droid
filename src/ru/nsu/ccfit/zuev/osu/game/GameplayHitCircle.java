@@ -77,7 +77,7 @@ public class GameplayHitCircle extends GameObject {
         float fadeInDuration = (float) beatmapCircle.timeFadeIn / 1000f;
 
         // Grow and Deflate are mutually incompatible, so at most one of these can be active.
-        final ModObjectScaleTween scaleTween = GameHelper.getObjectScaleTween();
+        final ModObjectScaleTween scaleTween = GameHelper.getObjectScaleTween(listener);
 
         // Initializing sprites
         circlePiece.setCircleColor(comboColor);

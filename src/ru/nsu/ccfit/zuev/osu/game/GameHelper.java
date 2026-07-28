@@ -45,8 +45,6 @@ public class GameHelper {
     private static ModMuted muted;
     private static ModFreezeFrame freezeFrame;
     private static ModApproachDifferent approachDifferent;
-    private static ModGrow grow;
-    private static ModDeflate deflate;
     private static boolean isKiai = false;
     private static ModAutoplay autoplay;
     private static double beatLength = 0;
@@ -355,47 +353,35 @@ public class GameHelper {
         GameHelper.approachDifferent = approachDifferent;
     }
 
-    public static ModGrow getGrow() {
-        return grow;
-    }
-
-    public static boolean isGrow() {
-        return grow != null;
-    }
-
-    public static void setGrow(final ModGrow grow) {
-        GameHelper.grow = grow;
-    }
-
-    public static ModDeflate getDeflate() {
-        return deflate;
-    }
-
-    public static boolean isDeflate() {
-        return deflate != null;
-    }
-
-    public static void setDeflate(final ModDeflate deflate) {
-        GameHelper.deflate = deflate;
-    }
-
     /**
-     * Gets the active hit object scale tween mod, if any.
+     * Gets the active hit object scale tween mod (Grow or Deflate), if any.
+     * <p>
+     * Unlike the other mods above, this is resolved from the running {@link GameScene} rather than
+     * from a static field. A static would have to be populated by a setter call in
+     * {@code GameScene.prepareScene()}, and if that value were ever left behind it would silently
+     * apply the effect on a later play after the mod had been switched off. The statistic's mod map
+     * is rebuilt every time gameplay starts, so reading from it cannot go stale.
      * <p>
      * Grow and Deflate are mutually incompatible, so at most one of them can ever be active. This
      * lets gameplay objects apply the effect without caring which of the two is selected.
      *
+     * @param listener The gameplay listener the object was initialized with.
      * @return The active {@link ModObjectScaleTween}, or {@code null} if neither is enabled.
      */
-    public static ModObjectScaleTween getObjectScaleTween() {
-        return grow != null ? grow : deflate;
-    }
+    public static ModObjectScaleTween getObjectScaleTween(final GameObjectListener listener) {
+        if (!(listener instanceof GameScene gameScene) || gameScene.stat == null) {
+            return null;
+        }
 
-    /**
-     * Whether a hit object scale tween mod (Grow or Deflate) is active.
-     */
-    public static boolean isObjectScaleTween() {
-        return getObjectScaleTween() != null;
+        var mods = gameScene.stat.getMod();
+
+        if (mods == null) {
+            return null;
+        }
+
+        var grow = mods.ofType(ModGrow.class);
+
+        return grow != null ? grow : mods.ofType(ModDeflate.class);
     }
 
     public static ModScoreV2 getScoreV2() {
