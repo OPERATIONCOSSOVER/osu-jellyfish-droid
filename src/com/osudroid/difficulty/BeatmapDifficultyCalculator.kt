@@ -20,6 +20,7 @@ import ru.nsu.ccfit.zuev.osu.scoring.Replay
 
 private val droidDifficultyCalculator = DroidDifficultyCalculator()
 private val standardDifficultyCalculator = StandardDifficultyCalculator()
+private val taikoDifficultyCalculator = TaikoDifficultyCalculator()
 
 private var droidPerformanceCalculator: DroidPerformanceCalculator? = null
 private var standardPerformanceCalculator: StandardPerformanceCalculator? = null
@@ -679,6 +680,7 @@ private class BeatmapDifficultyCacheManager {
     private fun processMods(mods: Iterable<Mod>?, mode: GameMode) = when (mode) {
         GameMode.Droid -> droidDifficultyCalculator.retainDifficultyAdjustmentMods(mods)
         GameMode.Standard -> standardDifficultyCalculator.retainDifficultyAdjustmentMods(mods)
+        GameMode.Taiko -> taikoDifficultyCalculator.retainDifficultyAdjustmentMods(mods)
     }
 }
 
