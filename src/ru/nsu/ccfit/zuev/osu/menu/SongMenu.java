@@ -1041,13 +1041,25 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
         String str = beatmapDifficultyText.getText();
         String[] strs = str.split("Stars: ");
+        String starsStr = strs.length == 2 ? strs[1] : String.valueOf(GameHelper.Round(beatmapInfo.getStarRating(), 2));
+
+        if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
+            // osu!taiko notes travel along a scrolling track and are all hit in the same place, so
+            // approach rate and circle size say nothing about the beatmap and are left out.
+            beatmapDifficultyText.setText(
+                "OD: " + difficulty.od + " " +
+                "HP: " + difficulty.hp + " " +
+                "Stars: " + starsStr
+            );
+            return;
+        }
 
         beatmapDifficultyText.setText(
             "AR: " + difficulty.getAR() + " " +
             "OD: " + difficulty.od + " " +
             "CS: " + difficulty.gameplayCS + " " +
             "HP: " + difficulty.hp + " " +
-            "Stars: " + (strs.length == 2 ? strs[1] : GameHelper.Round(beatmapInfo.getStarRating(), 2))
+            "Stars: " + starsStr
         );
     }
 
@@ -1080,11 +1092,9 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         cancelCalculationJobs();
 
         if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
-            beatmapDifficultyText.setText(
-                "OD: " + beatmapInfo.getOverallDifficulty() +
-                "  HP: " + beatmapInfo.getHpDrainRate() +
-                "  Native osu!taiko • BETA"
-            );
+            // The osu!taiko star rating is cached by the background difficulty calculation, and
+            // neither the osu!droid nor the osu!standard calculator can describe a taiko map, so
+            // there is nothing left to calculate here.
             return;
         }
 
