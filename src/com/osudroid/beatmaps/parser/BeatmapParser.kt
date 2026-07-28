@@ -70,7 +70,7 @@ class BeatmapParser {
      * @return A [Beatmap] containing relevant information of the beatmap file.
      * @throws IOException If an I/O error occurs while reading the file.
      * @throws NumberFormatException If the beatmap's file version cannot be determined.
-     * @throws IllegalArgumentException If the beatmap is not an osu!standard or osu!taiko beatmap.
+     * @throws IllegalArgumentException If the beatmap is not an osu!standard, osu!taiko, or osu!catch beatmap.
      */
     @JvmOverloads
     @Throws(IOException::class, IllegalArgumentException::class, NumberFormatException::class)
@@ -161,8 +161,11 @@ class BeatmapParser {
             }
         }
 
-        if (beatmap.general.mode !in 0..1) {
-            throw IllegalArgumentException("Only osu!standard and osu!taiko beatmaps are supported")
+        // osu!catch beatmaps (mode 2) are authored with the same hit object types as osu!standard,
+        // so they can be parsed without any ruleset-specific handling. osu!mania (mode 3) cannot, as
+        // it encodes column information in place of the object position.
+        if (beatmap.general.mode !in 0..2) {
+            throw IllegalArgumentException("Only osu!standard, osu!taiko, and osu!catch beatmaps are supported")
         }
 
         val processor = BeatmapProcessor(beatmap, scope)
