@@ -71,6 +71,20 @@
 
         <CheckBoxPreference
             android:defaultValue="true"
+            android:key="snowfallEffect"
+            android:summary="Snow falls on the main menu during the holiday season"
+            android:title="Snowfall"
+            app:layout="@layout/settings_preference_checkbox" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
+            android:key="menuParallax"
+            android:summary="Beatmap entries slide along a curve while scrolling song select"
+            android:title="Song select parallax"
+            app:layout="@layout/settings_preference_checkbox" />
+
+        <CheckBoxPreference
+            android:defaultValue="true"
             android:key="themeSong"
             android:summary="Play the osu! theme song on the main menu"
             android:title="Theme song"
