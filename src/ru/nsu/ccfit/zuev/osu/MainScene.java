@@ -91,23 +91,23 @@ public class MainScene implements IUpdateHandler {
     private static final float BACKGROUND_FADE_DURATION = 1.5f;
 
     /**
-     * The osu! cookie is drawn smaller than its texture so the menu reads like osu!stable's,
-     * where the logo is a compact centrepiece rather than dominating the screen.
+     * The osu! cookie is drawn at its full texture size, the way it has always been.
      *
-     * Every scale animation in this class is expressed relative to this value. The beat pulse and
-     * the exit animation both set absolute scales, so hardcoding 1.0f anywhere would snap the
-     * cookie back to full size on the very next beat.
+     * This is kept as a named constant rather than inlined because the beat pulse and the exit
+     * animation both set absolute scales. Expressing them against this value keeps them in step
+     * with each other, so the logo can be resized in one place without the pulse snapping it back.
      */
-    private static final float LOGO_SCALE = 0.62f;
+    private static final float LOGO_SCALE = 1.0f;
 
-    /** Peak of the on-beat pulse, the old 1.07f expressed against {@link #LOGO_SCALE}. */
+    /** Peak of the on-beat pulse, expressed against {@link #LOGO_SCALE}. */
     private static final float LOGO_BEAT_SCALE = LOGO_SCALE * 1.07f;
 
     /**
-     * Resting length of each spectrum spike. Shortened along with the cookie so the spikes stay
-     * tucked around it instead of reaching most of the way across the screen.
+     * Resting length of each spectrum spike, sized so the spikes clear the edge of the cookie.
+     * They radiate from the centre of the logo, so anything much shorter than its radius simply
+     * disappears behind it.
      */
-    private static final float SPECTRUM_BASE_LENGTH = 150f;
+    private static final float SPECTRUM_BASE_LENGTH = 250f;
 
     /** Thickness of a single spectrum spike. */
     private static final float SPECTRUM_THICKNESS = 8f;
@@ -205,8 +205,8 @@ public class MainScene implements IUpdateHandler {
             }
         };
 
-        // Scaling happens about the sprite's centre, so the cookie shrinks in place and the
-        // existing centring maths below stays correct.
+        // Scaling happens about the sprite's centre, so the cookie stays put and the existing
+        // centring maths below stays correct.
         logo.setScale(LOGO_SCALE);
 
         logoOverlay = new Sprite((float) Config.getRES_WIDTH() / 2 - (float) logotex.getWidth() / 2, (float) Config.getRES_HEIGHT() / 2 - (float) logotex.getHeight() / 2, logotex);
