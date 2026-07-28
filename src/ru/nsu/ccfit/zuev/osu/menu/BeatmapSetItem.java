@@ -151,9 +151,11 @@ public class BeatmapSetItem {
             }
             final float cy = y + oy + Config.getRES_HEIGHT() / 2f
                     + s.getHeight() / 2;
-            final float ox = x
-                    + Utils.toRes(170 * (float) Math.abs(Math.cos(cy * Math.PI
-                    / (Config.getRES_HEIGHT() * 2))));
+            // The parallax curve can be disabled in settings, in which case entries line up flat.
+            final float ox = x + (Config.getBoolean("menuParallax", true)
+                    ? Utils.toRes(170 * (float) Math.abs(Math.cos(cy * Math.PI
+                    / (Config.getRES_HEIGHT() * 2))))
+                    : 0);
             s.setPosition(ox - Utils.toRes(100), y + oy);
             oy += (s.getHeight() - Utils.toRes(25)) * percentAppeared;
         }

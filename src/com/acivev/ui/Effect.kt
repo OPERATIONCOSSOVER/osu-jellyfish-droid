@@ -17,6 +17,11 @@ import ru.nsu.ccfit.zuev.osu.ResourceManager
 import java.util.Calendar
 import javax.microedition.khronos.opengles.GL10
 
+/**
+ * Preference key backing the snowfall setting. Kept in sync with `res/xml/settings_graphics.xml`.
+ */
+const val SNOWFALL_PREFERENCE_KEY = "snowfallEffect"
+
 fun addSnowfall(scene: Scene, context: Context) {
     val snowflakeTextures = ResourceManager.getInstance().loadHighQualityAsset("snow", "snow.png")
 
@@ -172,6 +177,11 @@ fun addFireworks(scene: Scene, context: Context) {
 
 // Check if current date is within the snowfall period (Dec 15 - Jan 6), excluding fireworks time
 fun addSnowfallWithPeriod(scene: Scene, context: Context) {
+    // The snowfall can be turned off even while it is in season.
+    if (!Config.getBoolean(SNOWFALL_PREFERENCE_KEY, true)) {
+        return
+    }
+
     val calendar = Calendar.getInstance()
     val month = calendar.get(Calendar.MONTH)
     val day = calendar.get(Calendar.DAY_OF_MONTH)
