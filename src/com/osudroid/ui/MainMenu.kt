@@ -80,6 +80,12 @@ class MainMenu(val main: MainScene) {
 
                         BeatmapListing().show()
                     } else {
+                        // The intro only owns the menu on the way into the game. Heading into song
+                        // select hands the menu back to the regular beatmap flow for the rest of
+                        // the session, so stop the theme before the beatmap audio is loaded.
+                        ThemeSongManager.endIntro()
+                        ThemeSongManager.stop()
+
                         main.musicControl(MainScene.MusicOption.PLAY)
 
                         GlobalManager.getInstance().songMenu.reload()
@@ -136,6 +142,10 @@ class MainMenu(val main: MainScene) {
 
                     GlobalManager.getInstance().mainActivity.checkNewSkins()
                     GlobalManager.getInstance().mainActivity.loadBeatmapLibrary()
+
+                    // Same as solo: leaving the menu for multiplayer retires the intro.
+                    ThemeSongManager.endIntro()
+                    ThemeSongManager.stop()
 
                     GlobalManager.getInstance().songMenu.reload()
                     GlobalManager.getInstance().engine.scene = LobbyScene()
