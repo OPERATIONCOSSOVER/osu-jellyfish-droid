@@ -11,11 +11,13 @@ enum class RulesetMode(
     @JvmField val displayName: String
 ) {
     Droid(0, "osu!droid"),
-    Taiko(1, "osu!taiko (BETA)");
+    Taiko(1, "osu!taiko (BETA)"),
+    Catch(2, "osu!catch (BETA)");
 
     fun next() = when (this) {
         Droid -> Taiko
-        Taiko -> Droid
+        Taiko -> Catch
+        Catch -> Droid
     }
 
     companion object {
