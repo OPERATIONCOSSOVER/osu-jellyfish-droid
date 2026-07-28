@@ -12,5 +12,10 @@ enum class GameMode {
     /**
      * osu!standard.
      */
-    Standard
+    Standard,
+
+    /**
+     * osu!taiko.
+     */
+    Taiko
 }
