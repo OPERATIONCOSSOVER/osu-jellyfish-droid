@@ -358,4 +358,16 @@ val MIGRATION_5_6 = object : BackedUpMigration(5, 6) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+/**
+ * Migration from version 6 to 7.
+ *
+ * Adds the osu!taiko star rating column. It is left null so that native osu!taiko beatmaps that were
+ * imported before this version are picked up by the background difficulty calculation.
+ */
+val MIGRATION_6_7 = object : BackedUpMigration(6, 7) {
+    override fun performMigration(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE BeatmapInfo ADD COLUMN taikoStarRating REAL")
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
