@@ -8,7 +8,7 @@ import kotlin.math.min
 /**
  * Represents the skill required to read the rhythm changes of a taiko beatmap.
  */
-class TaikoRhythm(mods: Iterable<Mod>) : StrainSkill<TaikoDifficultyHitObject>(mods) {
+class TaikoRhythm(mods: Iterable<Mod>) : TaikoStrainSkill(mods) {
 
     private var currentStrain = 0.0
 
@@ -55,8 +55,6 @@ class TaikoRhythm(mods: Iterable<Mod>) : StrainSkill<TaikoDifficultyHitObject>(m
     // Rhythm strain is reset at the start of every section rather than carried over, as a rhythm
     // that has already been read does not stay difficult.
     override fun calculateInitialStrain(time: Double, current: TaikoDifficultyHitObject) = 0.0
-
-    override fun difficultyValue() = weightedDifficultyOf(currentStrainPeaks)
 
     /**
      * Penalises rhythm changes that the player has recently seen.

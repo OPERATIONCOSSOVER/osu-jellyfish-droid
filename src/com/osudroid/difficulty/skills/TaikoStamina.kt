@@ -8,7 +8,7 @@ import kotlin.math.pow
 /**
  * Represents the skill required to keep up with the physical demand of hitting taiko notes.
  */
-class TaikoStamina(mods: Iterable<Mod>) : StrainSkill<TaikoDifficultyHitObject>(mods) {
+class TaikoStamina(mods: Iterable<Mod>) : TaikoStrainSkill(mods) {
 
     private var currentStrain = 0.0
 
@@ -24,8 +24,6 @@ class TaikoStamina(mods: Iterable<Mod>) : StrainSkill<TaikoDifficultyHitObject>(
 
         return currentStrain * strainDecay(time - previous.startTime)
     }
-
-    override fun difficultyValue() = weightedDifficultyOf(currentStrainPeaks)
 
     private fun strainDecay(ms: Double) = STRAIN_DECAY_BASE.pow(ms / 1000)
 

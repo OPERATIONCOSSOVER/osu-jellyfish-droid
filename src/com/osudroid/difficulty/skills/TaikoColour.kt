@@ -8,7 +8,7 @@ import kotlin.math.pow
 /**
  * Represents the skill required to read the colour of taiko notes.
  */
-class TaikoColour(mods: Iterable<Mod>) : StrainSkill<TaikoDifficultyHitObject>(mods) {
+class TaikoColour(mods: Iterable<Mod>) : TaikoStrainSkill(mods) {
 
     private var currentStrain = 0.0
 
@@ -24,8 +24,6 @@ class TaikoColour(mods: Iterable<Mod>) : StrainSkill<TaikoDifficultyHitObject>(m
 
         return currentStrain * strainDecay(time - previous.startTime)
     }
-
-    override fun difficultyValue() = weightedDifficultyOf(currentStrainPeaks)
 
     private fun strainDecay(ms: Double) = STRAIN_DECAY_BASE.pow(ms / 1000)
 
