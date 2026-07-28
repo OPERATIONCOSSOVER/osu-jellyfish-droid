@@ -16,11 +16,11 @@ on:
       tag:
         description: "Release tag"
         required: true
-        default: "20260727-taiko-beta.12"
+        default: "20260727-taiko-beta.12.1"
       title:
         description: "Release title"
         required: true
-        default: "osu!jellyfish Taiko Beta 12"
+        default: "osu!jellyfish Taiko Beta 12.1"
 
 permissions:
   contents: write
@@ -75,25 +75,31 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          ## osu!jellyfish Taiko Beta 12
+          ## osu!jellyfish Taiko Beta 12.1
 
-          ### Added
+          A follow-up to Beta 12 that makes the custom intro theme actually behave like an intro.
 
-          - **Custom intro theme from an .osz file.** Settings now has a "Choose theme .osz"
-            option that lets you pick any .osz as the main-menu theme song instead of relying on
-            the bundled theme. The file is copied into the app's own storage, so moving or
-            deleting the original does not break it, and it is extracted outside the Songs
-            folder so it never shows up as a playable beatmap. "Reset theme song" restores the
-            bundled circles! theme.
-          - **Seasonal effects toggle.** A new "Seasonal effects" switch controls seasonal
-            theming. During Halloween (all of October plus November 1-2) the main-menu
-            visualiser bars and the glowing corner star bursts are tinted orange.
+          ### Fixed
 
-          ### Notes
+          - **Picked .osz files silently falling back to the bundled theme.** The importer only
+            looked for audio at the very top level of the extracted .osz. Any .osz that wraps its
+            contents in a folder resolved to no audio at all, which reset the setting and put the
+            bundled circles! theme back. The extracted files are now searched recursively.
 
-          - The corner star bursts pick up the Halloween tint on the next app launch, because
-            their colour is applied when the menu scene is first built. The visualiser bars
-            update immediately.
+          ### Changed
+
+          - **"Now playing" shows the intro.** While the intro is playing, the main menu names the
+            intro's own artist and title, read from the .osu inside the .osz, instead of an
+            unrelated beatmap picked out of your library.
+          - **The cookie beats to the intro.** The logo pulse and the kiai star bursts now follow
+            the intro's own timing points, so the beat matches what you are actually hearing.
+          - **The intro is only for opening the game.** It plays on the main menu at launch and
+            stops for good once you head into song select or multiplayer. Coming back to the menu
+            uses the beatmap you selected in song select, matching osu!stable.
+          - **Changing the theme takes effect on the next launch.** The intro's metadata and
+            timing are read once while the menu is being built, so picking or resetting a theme
+            now tells you to restart rather than swapping the audio out from under the menu and
+            leaving the beat out of step.
           EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
