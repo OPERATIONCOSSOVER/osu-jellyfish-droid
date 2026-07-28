@@ -99,7 +99,31 @@ class TaikoGameScene private constructor(
         /** Time in milliseconds this object takes to travel from spawn to the hit target. */
         var preempt: Double = 1650.0,
         var judged: Boolean = false,
-        var entity: UIComponent? = null
+        var entity: UIComponent? = null,
+        /**
+         * Denden only: how many alternating hits are needed to clear it, derived from the map's
+         * overall difficulty and the denden's duration.
+         */
+        var requiredHits: Int = 0,
+        /** Denden only: how many alternating hits have been collected so far. */
+        var hitsSoFar: Int = 0,
+        /**
+         * Denden only: the colour of the last counted hit, or null before the first one. osu!taiko
+         * only advances the counter when the colour changes, so this is what enforces alternation.
+         */
+        var lastHitKat: Boolean? = null,
+        /** Drumroll only: the absolute times of each tick, in milliseconds. */
+        var tickTimes: List<Double> = emptyList(),
+        /** Drumroll only: the next tick that can still be collected. */
+        var nextTickIndex: Int = 0,
+        /** Drumroll only: how many ticks were actually collected. */
+        var ticksHit: Int = 0,
+        /** Drumroll only: half the tick spacing, which is the window a tick can be hit within. */
+        var tickWindow: Double = 50.0,
+        /** Denden only: the countdown label drawn in the middle of the spinner. */
+        var counterText: UIText? = null,
+        /** Denden only: the shrinking approach circle. */
+        var approachSprite: UIComponent? = null
     )
 
     /**
@@ -133,6 +157,13 @@ class TaikoGameScene private constructor(
     private val bigNoteDiameter = laneHeight * 0.78f
     private val targetDiameter = laneHeight * 0.76f
     private val judgementBaseY = laneBottom + 10f
+
+    /**
+     * Size of the denden spinner. Dendens are drawn as the standard spinner in the middle of the
+     * screen rather than as a note travelling down the lane, so this is sized against the screen
+     * rather than against the lane.
+     */
+    private val dendenDiameter = screenHeight * 0.55f
 
     /** Distance a note travels from spawn to the judgement circle. */
     private val travelDistance = spawnX - targetX
@@ -595,6 +626,10 @@ class TaikoGameScene private constructor(
                 songService.seekTo(0)
 
                 updateThread {
+                    // Dendens are drawn with the standard spinner textures, which are loaded
+                    // lazily. Without this the spinner sprites would come back blank.
+                    resources.checkSpinnerTextures()
+
                     objects = taikoObjects
                     firstActiveIndex = 0
                     greatWindow = calculatedGreatWindow
@@ -656,7 +691,7 @@ class TaikoGameScene private constructor(
 
         val velocity = (pxPerBeat / timingPoint.msPerBeat).coerceAtLeast(0.01)
 
-        return TaikoObject(
+        val obj = TaikoObject(
             kind,
             startTime,
             endTime,
@@ -665,7 +700,58 @@ class TaikoGameScene private constructor(
             velocity = velocity,
             preempt = (travelDistance / velocity).coerceIn(MIN_PREEMPT, MAX_PREEMPT)
         )
+
+        when (kind) {
+            ObjectKind.Denden -> {
+                // osu!taiko derives the required hit count from the denden's length and the map's
+                // overall difficulty, then multiplies by a legacy factor because swells are easier
+                // in taiko than spinners are in osu!.
+                val od = difficulty.od.toDouble().coerceIn(0.0, 10.0)
+                val hitsPerSecond = difficultyRange(od, 3.0, 5.0, 7.5) * SWELL_HIT_MULTIPLIER
+
+                obj.requiredHits = max(
+                    1.0,
+                    (endTime - startTime) / 1000.0 * hitsPerSecond
+                ).toInt()
+            }
+
+            ObjectKind.Drumroll -> {
+                // Drum rolls are scored on discrete ticks rather than on raw tapping, so the tick
+                // times are precomputed here. Tick rate follows the map's slider tick rate, and
+                // the window a tick can be collected within is half the spacing between ticks.
+                val tickRate = if (difficulty.sliderTickRate.toInt() == 3) 3.0 else 4.0
+                val tickSpacing = timingPoint.msPerBeat / tickRate
+
+                if (tickSpacing > 0.0) {
+                    val ticks = mutableListOf<Double>()
+                    var t = startTime
+
+                    while (t < endTime + tickSpacing / 2.0) {
+                        ticks.add(t)
+                        t += tickSpacing
+                    }
+
+                    obj.tickTimes = ticks
+                    obj.tickWindow = tickSpacing / 2.0
+                }
+            }
+
+            else -> Unit
+        }
+
+        return obj
     }
+
+    /**
+     * The standard osu! difficulty scaling curve: [min] at difficulty 0, [mid] at 5 and [max] at
+     * 10, interpolated linearly between those points.
+     */
+    private fun difficultyRange(difficulty: Double, min: Double, mid: Double, max: Double): Double =
+        when {
+            difficulty > 5.0 -> mid + (max - mid) * (difficulty - 5.0) / 5.0
+            difficulty < 5.0 -> mid - (mid - min) * (5.0 - difficulty) / 5.0
+            else -> mid
+        }
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
         if (
@@ -821,16 +907,31 @@ class TaikoGameScene private constructor(
                 continue
             }
 
-            if (obj.entity == null && now >= obj.startTime - obj.preempt && now <= obj.endTime + missWindow) {
+            // A denden is not a travelling note, so it appears when it starts rather than
+            // scrolling in from the right.
+            val spawnTime = if (obj.kind == ObjectKind.Denden) {
+                obj.startTime
+            } else {
+                obj.startTime - obj.preempt
+            }
+
+            if (obj.entity == null && now >= spawnTime && now <= obj.endTime + missWindow) {
                 val entity = createObjectEntity(obj)
                 obj.entity = entity
                 playfield.attachChild(entity)
             }
 
             obj.entity?.let { entity ->
-                val x = targetX + ((obj.startTime - now) * obj.velocity).toFloat()
-                entity.x = x - entity.width / 2f
-                entity.y = laneY - entity.height / 2f
+                if (obj.kind == ObjectKind.Denden) {
+                    // Pinned to the centre of the screen, exactly like the standard spinner.
+                    entity.x = screenWidth / 2f - entity.width / 2f
+                    entity.y = screenHeight / 2f - entity.height / 2f
+                    updateDendenApproach(obj, now)
+                } else {
+                    val x = targetX + ((obj.startTime - now) * obj.velocity).toFloat()
+                    entity.x = x - entity.width / 2f
+                    entity.y = laneY - entity.height / 2f
+                }
             }
 
             when (obj.kind) {
@@ -840,13 +941,33 @@ class TaikoGameScene private constructor(
                     }
                 }
 
-                ObjectKind.Drumroll, ObjectKind.Denden -> {
-                    if (now > obj.endTime) {
+                ObjectKind.Drumroll -> {
+                    // Give the final tick its full window before retiring the roll.
+                    if (now > obj.endTime + obj.tickWindow) {
                         expire(obj)
+                    }
+                }
+
+                ObjectKind.Denden -> {
+                    if (now > obj.endTime) {
+                        expireDenden(obj)
                     }
                 }
             }
         }
+    }
+
+    /** Shrinks the denden's approach circle towards its centre as the denden runs out of time. */
+    private fun updateDendenApproach(obj: TaikoObject, now: Double) {
+        val approach = obj.approachSprite ?: return
+        val duration = (obj.endTime - obj.startTime).coerceAtLeast(1.0)
+        val progress = ((now - obj.startTime) / duration).coerceIn(0.0, 1.0).toFloat()
+        val diameter = dendenDiameter * (1f - progress)
+
+        approach.width = diameter
+        approach.height = diameter
+        approach.x = (dendenDiameter - diameter) / 2f
+        approach.y = (dendenDiameter - diameter) / 2f
     }
 
     private fun processAutoPlay(now: Double) {
@@ -869,23 +990,22 @@ class TaikoGameScene private constructor(
                 }
 
                 ObjectKind.Drumroll -> {
-                    // For drumrolls, tap every 100ms to simulate active rolling.
-                    if (now in obj.startTime..obj.endTime) {
-                        autoHitRoll(now)
+                    // Collect ticks as they come due rather than tapping on a fixed interval.
+                    if (now >= obj.startTime) {
+                        autoHitRoll(obj, now)
                     }
                 }
 
                 ObjectKind.Denden -> {
-                    // For denden (spinner), tap every 50ms for higher score.
+                    // Alternate colours, which is the only way a denden counter advances.
                     if (now in obj.startTime..obj.endTime) {
-                        autoHitDenden(now)
+                        autoHitDenden(obj, now)
                     }
                 }
             }
         }
     }
 
-    private var lastAutoRollTime = 0.0
     private var lastAutoDendenTime = 0.0
 
     private fun autoHitNote(obj: TaikoObject, isKat: Boolean) {
@@ -905,36 +1025,31 @@ class TaikoGameScene private constructor(
         releaseHit(obj)
     }
 
-    private fun autoHitRoll(now: Double) {
-        // Tap every 100ms during a drumroll. Note that positions here are milliseconds.
-        if (now - lastAutoRollTime < AUTO_ROLL_INTERVAL) {
+    private fun autoHitRoll(obj: TaikoObject, now: Double) {
+        if (obj.nextTickIndex >= obj.tickTimes.size) {
             return
         }
-        lastAutoRollTime = now
 
-        rollHits++
-        score += 50
-        health = (health + 0.0025f).coerceAtMost(1f)
+        if (now < obj.tickTimes[obj.nextTickIndex]) {
+            return
+        }
 
         inputFlash.color = DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
-        showJudgement("ROLL", Color4(0xFFFFC107))
+        registerRollHit(obj, false, now)
     }
 
-    private fun autoHitDenden(now: Double) {
-        // Tap every 50ms during a denden for higher score.
+    private fun autoHitDenden(obj: TaikoObject, now: Double) {
         if (now - lastAutoDendenTime < AUTO_DENDEN_INTERVAL) {
             return
         }
         lastAutoDendenTime = now
 
-        rollHits++
-        score += 100
-        health = (health + 0.0025f).coerceAtMost(1f)
-
-        inputFlash.color = Color4(0xFFFFC107)
+        // Flip colour every hit; hitting the same colour twice would not count.
+        val isKat = obj.lastHitKat != true
+        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
-        showJudgement("DEN!", Color4(0xFFFFC107))
+        registerDendenHit(obj, isKat, now)
     }
 
     private fun createObjectEntity(obj: TaikoObject): UIComponent = when (obj.kind) {
@@ -964,17 +1079,56 @@ class TaikoGameScene private constructor(
             }
         }
 
-        ObjectKind.Drumroll, ObjectKind.Denden -> UIBox().apply {
+        ObjectKind.Drumroll -> UIBox().apply {
             // Length follows the object's own scroll speed so the body matches its duration.
             val durationWidth = max(
                 80f,
                 ((obj.endTime - obj.startTime) * obj.velocity).toFloat()
             )
             width = durationWidth
-            height = if (obj.kind == ObjectKind.Denden) laneHeight * 0.54f else laneHeight * 0.34f
+            height = laneHeight * 0.34f
             cornerRadius = height / 2f
-            color = if (obj.kind == ObjectKind.Denden) Color4(0xFFFFC107) else Color4(0xFFFF7043)
+            color = Color4(0xFFFF7043)
             alpha = 0.88f
+        }
+
+        // Dendens use the standard spinner presentation rather than a long note, matching how
+        // osu! itself renders them: a fixed spinner in the middle of the screen with a shrinking
+        // approach circle and a countdown of the hits still needed.
+        ObjectKind.Denden -> UIContainer().apply {
+            width = dendenDiameter
+            height = dendenDiameter
+
+            sprite {
+                width = dendenDiameter
+                height = dendenDiameter
+                scaleType = ScaleType.Fit
+                textureRegion = resources.getTexture("spinner-background")
+                alpha = 0.85f
+            }
+
+            sprite {
+                width = dendenDiameter
+                height = dendenDiameter
+                scaleType = ScaleType.Fit
+                textureRegion = resources.getTexture("spinner-circle")
+            }
+
+            obj.approachSprite = sprite {
+                width = dendenDiameter
+                height = dendenDiameter
+                scaleType = ScaleType.Fit
+                textureRegion = resources.getTexture("spinner-approachcircle")
+            }
+
+            obj.counterText = text {
+                y = dendenDiameter / 2f - 30f
+                width = dendenDiameter
+                alignment = Anchor.TopCenter
+                font = resources.getFont("bigFont")
+                color = Color4.White
+                text = obj.requiredHits.toString()
+            }
         }
     }
 
@@ -1003,19 +1157,23 @@ class TaikoGameScene private constructor(
         inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
 
+        val activeDenden = objects.firstOrNull {
+            !it.judged && it.kind == ObjectKind.Denden && now in it.startTime..it.endTime
+        }
+
+        if (activeDenden != null) {
+            registerDendenHit(activeDenden, isKat, now)
+            return
+        }
+
         val activeRoll = objects.firstOrNull {
             !it.judged &&
-                (it.kind == ObjectKind.Drumroll || it.kind == ObjectKind.Denden) &&
-                now in it.startTime..it.endTime
+                it.kind == ObjectKind.Drumroll &&
+                now in it.startTime..(it.endTime + it.tickWindow)
         }
 
         if (activeRoll != null) {
-            rollHits++
-            score += if (activeRoll.kind == ObjectKind.Denden) 100 else 50
-            health = (health + 0.0025f).coerceAtMost(1f)
-            showJudgement(if (activeRoll.kind == ObjectKind.Denden) "DEN!" else "ROLL", Color4(0xFFFFC107))
-            triggerHitExplosion(isKat, false)
-            playInputSound(isKat, now)
+            registerRollHit(activeRoll, isKat, now)
             return
         }
 
@@ -1060,6 +1218,111 @@ class TaikoGameScene private constructor(
         maxCombo = max(maxCombo, combo)
         playSamples(candidate)
         releaseHit(candidate)
+    }
+
+    /**
+     * Handles a tap landing on a denden.
+     *
+     * osu!taiko only advances the counter when the colour alternates, so repeating the same colour
+     * still plays and flashes but does not count. Dendens never touch the combo counter and never
+     * heal, and each counted hit is worth a flat score regardless of timing.
+     */
+    private fun registerDendenHit(obj: TaikoObject, isKat: Boolean, now: Double) {
+        playInputSound(isKat, now)
+        triggerHitExplosion(isKat, false)
+
+        if (obj.lastHitKat == isKat) {
+            return
+        }
+
+        obj.lastHitKat = isKat
+        obj.hitsSoFar++
+        score += DENDEN_HIT_SCORE
+
+        val remaining = (obj.requiredHits - obj.hitsSoFar).coerceAtLeast(0)
+        obj.counterText?.text = remaining.toString()
+
+        if (obj.hitsSoFar >= obj.requiredHits) {
+            completeDenden(obj)
+        } else {
+            showJudgement("DEN!", Color4(0xFFFFC107))
+        }
+    }
+
+    /**
+     * Clears a denden. Completion is worth a large GREAT with the current combo multiplier, but
+     * still does not increment combo itself.
+     */
+    private fun completeDenden(obj: TaikoObject) {
+        score += DENDEN_COMPLETE_SCORE + combo * 12L
+        showJudgement("CLEAR!", Color4(0xFFFFD54F))
+
+        obj.judged = true
+        obj.counterText = null
+        obj.approachSprite = null
+
+        obj.entity?.let { entity ->
+            decayingEntities.add(
+                DecayingEntity(
+                    entity,
+                    DENDEN_CLEAR_DECAY_DURATION,
+                    DENDEN_CLEAR_DECAY_DURATION,
+                    0f,
+                    -90f
+                )
+            )
+        }
+        obj.entity = null
+    }
+
+    /**
+     * Retires an uncleared denden. Failing one costs health but never breaks combo, and it is not
+     * counted as a miss because dendens do not contribute to accuracy in osu!taiko.
+     */
+    private fun expireDenden(obj: TaikoObject) {
+        if (obj.hitsSoFar < obj.requiredHits) {
+            health = (health - 0.07f).coerceAtLeast(0f)
+        }
+
+        obj.counterText = null
+        obj.approachSprite = null
+        expire(obj)
+    }
+
+    /**
+     * Handles a tap landing on a drum roll.
+     *
+     * Drum rolls are not scored on raw tapping speed: they carry discrete ticks, and a tap only
+     * counts if it lands within half a tick spacing of the next uncollected tick. Tapping faster
+     * than the ticks appear collects nothing extra, and tapping too slowly simply lets ticks go by.
+     * Missed ticks carry no penalty at all.
+     */
+    private fun registerRollHit(obj: TaikoObject, isKat: Boolean, now: Double) {
+        playInputSound(isKat, now)
+        triggerHitExplosion(isKat, obj.isBig)
+
+        // Step past any ticks whose window has already closed.
+        while (
+            obj.nextTickIndex < obj.tickTimes.size &&
+            now > obj.tickTimes[obj.nextTickIndex] + obj.tickWindow
+        ) {
+            obj.nextTickIndex++
+        }
+
+        if (obj.nextTickIndex >= obj.tickTimes.size) {
+            return
+        }
+
+        // Too early: the next tick has not opened yet.
+        if (now < obj.tickTimes[obj.nextTickIndex] - obj.tickWindow) {
+            return
+        }
+
+        obj.nextTickIndex++
+        obj.ticksHit++
+        rollHits++
+        score += if (obj.isBig) BIG_ROLL_TICK_SCORE else ROLL_TICK_SCORE
+        showJudgement("ROLL", Color4(0xFFFFC107))
     }
 
     /**
@@ -1467,8 +1730,26 @@ class TaikoGameScene private constructor(
         private const val HIT_DECAY_VELOCITY_Y = -1150f
         private const val MISS_DECAY_DURATION = 0.22f
 
-        /** Autoplay tap intervals, in milliseconds to match song position units. */
-        private const val AUTO_ROLL_INTERVAL = 100.0
+        /** A cleared denden lingers a little longer than a note so the clear reads. */
+        private const val DENDEN_CLEAR_DECAY_DURATION = 0.4f
+
+        /**
+         * Dendens are easier in taiko than spinners are in osu!, so the required hit count carries
+         * this legacy multiplier on top of the difficulty-scaled hits per second.
+         */
+        private const val SWELL_HIT_MULTIPLIER = 1.65
+
+        /** Each counted denden hit is worth a flat score, with no timing or combo scaling. */
+        private const val DENDEN_HIT_SCORE = 300L
+
+        /** Clearing a denden pays out like a large note. */
+        private const val DENDEN_COMPLETE_SCORE = 600L
+
+        /** Drum roll ticks pay a flat bonus; large rolls pay considerably more. */
+        private const val ROLL_TICK_SCORE = 300L
+        private const val BIG_ROLL_TICK_SCORE = 720L
+
+        /** Autoplay denden tap interval, in milliseconds to match song position units. */
         private const val AUTO_DENDEN_INTERVAL = 50.0
 
         @JvmStatic
