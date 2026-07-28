@@ -481,7 +481,9 @@ public class MainScene implements IUpdateHandler {
             }
             break;
             case PLAY: {
-                if (ThemeSongManager.isActive()) {
+                // Only while the intro still owns the menu. Once song select has been entered the
+                // player controls the library track, so the theme must not hijack playback.
+                if (ThemeSongManager.isIntroActive()) {
                     ThemeSongManager.play();
                     break;
                 }
@@ -632,7 +634,7 @@ public class MainScene implements IUpdateHandler {
                 }
             } else {
                 for (Rectangle specRectangle : spectrum) { specRectangle.setWidth(0); specRectangle.setAlpha(0); }
-                if (!doChange && !doStop && !ThemeSongManager.isActive() && GlobalManager.getInstance().getSongService() != null && GlobalManager.getInstance().getSongService().getPosition() >= GlobalManager.getInstance().getSongService().getLength()) {
+                if (!doChange && !doStop && !ThemeSongManager.isIntroActive() && GlobalManager.getInstance().getSongService() != null && GlobalManager.getInstance().getSongService().getPosition() >= GlobalManager.getInstance().getSongService().getLength()) {
                     musicControl(MusicOption.NEXT);
                 }
             }
@@ -649,26 +651,51 @@ public class MainScene implements IUpdateHandler {
     }
 
     public void loadBeatmapInfo() {
+        // While the intro owns the menu, "now playing" names the track that is actually audible
+        // rather than whichever beatmap the shuffled library happens to be sitting on.
+        final String introLabel = ThemeSongManager.isIntroActive() ? ThemeSongManager.getIntroDisplayName() : null;
+
         if (LibraryManager.getSizeOfBeatmaps() != 0) {
             beatmapInfo = LibraryManager.getCurrentBeatmapSet().getBeatmap(0);
-            if (musicInfoText == null) {
-                musicInfoText = new ChangeableText(Utils.toRes(Config.getRES_WIDTH() - 500), Utils.toRes(3), ResourceManager.getInstance().getFont("font"), "None...", HorizontalAlign.RIGHT, 35);
-            }
-            musicInfoText.setText(beatmapInfo.getArtistText() + " - " + beatmapInfo.getTitleText(), true);
-            try {
-                musicInfoText.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - musicInfoText.getWidth()), musicInfoText.getY());
-                music_nowplay.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - musicInfoText.getWidth() - 130), 0);
-            } catch (NullPointerException e) {
-                musicInfoText.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - 200), 5);
-                music_nowplay.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - 200 - 130), 0);
-            }
+        }
+
+        if (beatmapInfo == null && introLabel == null) { return; }
+
+        if (musicInfoText == null) {
+            musicInfoText = new ChangeableText(Utils.toRes(Config.getRES_WIDTH() - 500), Utils.toRes(3), ResourceManager.getInstance().getFont("font"), "None...", HorizontalAlign.RIGHT, 35);
+        }
+
+        final String label = introLabel != null
+            ? introLabel
+            : beatmapInfo.getArtistText() + " - " + beatmapInfo.getTitleText();
+
+        musicInfoText.setText(label, true);
+
+        try {
+            musicInfoText.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - musicInfoText.getWidth()), musicInfoText.getY());
+            music_nowplay.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - musicInfoText.getWidth() - 130), 0);
+        } catch (NullPointerException e) {
+            musicInfoText.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - 200), 5);
+            music_nowplay.setPosition(Utils.toRes(Config.getRES_WIDTH() - 500 + 470 - 200 - 130), 0);
         }
     }
 
     public void loadTimingPoints(boolean reloadMusic) {
         // Reapplied here so toggling the seasonal setting is picked up as soon as settings close.
         applySeasonalAccent();
-        if (beatmapInfo == null) { return; }
+
+        final boolean intro = ThemeSongManager.isIntroActive();
+
+        // With an empty library there is no beatmap to fall back on, but the intro can still play
+        // and beat on its own.
+        if (beatmapInfo == null) {
+            if (intro) {
+                if (reloadMusic) { ThemeSongManager.play(); musicStarted = true; }
+                applyIntroTiming();
+            }
+            return;
+        }
+
         for (ParticleSystem particleSpout : particleSystem) { particleSpout.setParticlesSpawnEnabled(false); }
         particleEnabled = false;
         GlobalManager.getInstance().setSelectedBeatmap(beatmapInfo);
@@ -683,7 +710,7 @@ public class MainScene implements IUpdateHandler {
             } catch (Exception e) { Debug.e(e.toString()); lastBackground.setAlpha(0); }
         } else { lastBackground.setAlpha(0); }
         if (reloadMusic) {
-            if (ThemeSongManager.isActive()) {
+            if (intro) {
                 ThemeSongManager.play();
                 musicStarted = true;
             } else if (GlobalManager.getInstance().getSongService() != null) {
@@ -696,6 +723,14 @@ public class MainScene implements IUpdateHandler {
         Arrays.fill(peakLevel, 0f);
         Arrays.fill(peakDownRate, 1f);
         Arrays.fill(peakAlpha, 0f);
+
+        // The intro is what is playing, so the cookie has to pulse to its timing rather than to a
+        // beatmap that is not audible.
+        if (intro && ThemeSongManager.hasIntroTiming()) {
+            applyIntroTiming();
+            return;
+        }
+
         try {
             var beatmap = BeatmapCache.getBeatmap(beatmapInfo, false);
             var timingControlPoints = new LinkedList<>(beatmap.getControlPoints().timing.controlPoints);
@@ -714,6 +749,40 @@ public class MainScene implements IUpdateHandler {
             bpmLength = currentTimingPoint.msPerBeat;
             beatPassTime = (position - currentTimingPoint.time) % bpmLength;
         } catch (IOException | IllegalArgumentException e) { Debug.e("Failed to load beatmap for timing points: " + e); }
+    }
+
+    /**
+     * Points the menu's beat at the intro's own timing points, parsed from the .osu inside the
+     * theme .osz. Mirrors the beatmap path below: the queues are wound forward to wherever the
+     * track already is, and whatever is left is consumed frame by frame in {@link #onUpdate}.
+     */
+    private void applyIntroTiming() {
+        if (!ThemeSongManager.hasIntroTiming()) { return; }
+
+        final LinkedList<TimingControlPoint> introTiming = ThemeSongManager.getIntroTimingPoints();
+        final LinkedList<EffectControlPoint> introEffects = ThemeSongManager.getIntroEffectPoints();
+
+        int position = GlobalManager.getInstance().getSongService() != null ? GlobalManager.getInstance().getSongService().getPosition() : 0;
+
+        TimingControlPoint timingPoint = null;
+        EffectControlPoint effectPoint = null;
+
+        while (!introTiming.isEmpty() && position > introTiming.peek().time) { timingPoint = introTiming.pop(); }
+        while (!introEffects.isEmpty() && position > introEffects.peek().time) { effectPoint = introEffects.pop(); }
+
+        // Before the first timing point the track has not started yet, so borrow the upcoming one
+        // rather than leaving the cookie on the placeholder 1000 ms beat.
+        if (timingPoint == null && !introTiming.isEmpty()) { timingPoint = introTiming.peek(); }
+
+        this.timingControlPoints = introTiming;
+        this.effectControlPoints = introEffects;
+        this.currentTimingPoint = timingPoint;
+        this.currentEffectPoint = effectPoint;
+
+        if (timingPoint != null) {
+            bpmLength = timingPoint.msPerBeat;
+            beatPassTime = (position - timingPoint.time) % bpmLength;
+        }
     }
 
     public void showExitDialog() {
@@ -775,11 +844,13 @@ public class MainScene implements IUpdateHandler {
         GlobalManager.getInstance().getSongService().setGaming(false);
         GlobalManager.getInstance().getEngine().setScene(getScene());
         applySeasonalAccent();
-        if (GlobalManager.getInstance().getSelectedBeatmap() != null) {
-            setBeatmap(GlobalManager.getInstance().getSelectedBeatmap());
-        }
-        if (ThemeSongManager.isActive()) {
+
+        // Coming back from song select hands the menu to whatever the player selected there. The
+        // intro is only ever heard on the way into the game, so it is not resumed here.
+        if (ThemeSongManager.isIntroActive()) {
             ThemeSongManager.play();
+        } else if (GlobalManager.getInstance().getSelectedBeatmap() != null) {
+            setBeatmap(GlobalManager.getInstance().getSelectedBeatmap());
         }
     }
 
