@@ -878,8 +878,11 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         for (final BeatmapSetItem item : items) {
             final float cy = oy + Config.getRES_HEIGHT() / 2f + item.getHeight()
                     / 2;
-            float ox = Config.getRES_WIDTH() / 1.85f + 200 * (float) Math.abs(Math.cos(cy * Math.PI
-                    / (Config.getRES_HEIGHT() * 2)));
+            // The carousel curve can be disabled in settings, in which case the entries line up flat.
+            float ox = Config.getRES_WIDTH() / 1.85f + (Config.getBoolean("menuParallax", true)
+                    ? 200 * (float) Math.abs(Math.cos(cy * Math.PI
+                    / (Config.getRES_HEIGHT() * 2)))
+                    : 0);
             ox = Utils.toRes(ox);
             item.setPos(ox, oy);
             oy += item.getHeight();
