@@ -90,6 +90,34 @@ public class MainScene implements IUpdateHandler {
 
     private static final float BACKGROUND_FADE_DURATION = 1.5f;
 
+    /**
+     * The osu! cookie is drawn smaller than its texture so the menu reads like osu!stable's,
+     * where the logo is a compact centrepiece rather than dominating the screen.
+     *
+     * Every scale animation in this class is expressed relative to this value. The beat pulse and
+     * the exit animation both set absolute scales, so hardcoding 1.0f anywhere would snap the
+     * cookie back to full size on the very next beat.
+     */
+    private static final float LOGO_SCALE = 0.62f;
+
+    /** Peak of the on-beat pulse, the old 1.07f expressed against {@link #LOGO_SCALE}. */
+    private static final float LOGO_BEAT_SCALE = LOGO_SCALE * 1.07f;
+
+    /**
+     * Resting length of each spectrum spike. Shortened along with the cookie so the spikes stay
+     * tucked around it instead of reaching most of the way across the screen.
+     */
+    private static final float SPECTRUM_BASE_LENGTH = 150f;
+
+    /** Thickness of a single spectrum spike. */
+    private static final float SPECTRUM_THICKNESS = 8f;
+
+    /** Compact "now playing" transport bar, sized after the stable main menu's. */
+    private static final float MUSIC_BUTTON_SIZE = 34f;
+    private static final float MUSIC_BUTTON_SPACING = 42f;
+    private static final float MUSIC_BUTTON_Y = 44f;
+    private static final float MUSIC_BUTTON_INSET = 30f;
+
     public LinearSongProgress progressBar;
     public BeatmapInfo beatmapInfo;
     private Context context;
@@ -130,6 +158,11 @@ public class MainScene implements IUpdateHandler {
     private float seasonalSlideTime = 0;
 
     private MainMenu menu;
+
+    /** X of the transport button sitting [slot] places in from the right edge. */
+    private static float musicButtonX(int slot) {
+        return Config.getRES_WIDTH() - MUSIC_BUTTON_SPACING * slot + MUSIC_BUTTON_INSET;
+    }
 
     public void load(Context context) {
         this.context = context;
@@ -172,8 +205,12 @@ public class MainScene implements IUpdateHandler {
             }
         };
 
+        // Scaling happens about the sprite's centre, so the cookie shrinks in place and the
+        // existing centring maths below stays correct.
+        logo.setScale(LOGO_SCALE);
+
         logoOverlay = new Sprite((float) Config.getRES_WIDTH() / 2 - (float) logotex.getWidth() / 2, (float) Config.getRES_HEIGHT() / 2 - (float) logotex.getHeight() / 2, logotex);
-        logoOverlay.setScale(1.07f);
+        logoOverlay.setScale(LOGO_BEAT_SCALE);
         logoOverlay.setAlpha(0.2f);
 
         menu = new MainMenu(this);
@@ -201,7 +238,18 @@ public class MainScene implements IUpdateHandler {
         };
         scene.attachChild(box);
 
-        final Sprite music_prev = new Sprite(Config.getRES_WIDTH() - 50 * 6 + 35, 47, 40, 40, ResourceManager.getInstance().getTexture("music_prev")) {
+        // Bottom-left credit, stacked above the version badge the way stable stacks its footer.
+        final Text footerLink = new Text(0, 0, ResourceManager.getInstance().getFont("smallFont"), "osu.ppy.sh");
+        footerLink.setColor(1f, 1f, 1f, 0.5f);
+        footerLink.setPosition(12f, Config.getRES_HEIGHT() - box.getHeight() - footerLink.getHeight() - 14f);
+        scene.attachChild(footerLink);
+
+        final Text footerCredit = new Text(0, 0, ResourceManager.getInstance().getFont("smallFont"), "ppy powered 2007-2026");
+        footerCredit.setColor(1f, 1f, 1f, 0.5f);
+        footerCredit.setPosition(12f, footerLink.getY() - footerCredit.getHeight() - 2f);
+        scene.attachChild(footerCredit);
+
+        final Sprite music_prev = new Sprite(musicButtonX(6), MUSIC_BUTTON_Y, MUSIC_BUTTON_SIZE, MUSIC_BUTTON_SIZE, ResourceManager.getInstance().getTexture("music_prev")) {
             @Override
             public boolean onAreaTouched(final TouchEvent pSceneTouchEvent, final float pTouchAreaLocalX, final float pTouchAreaLocalY) {
                 if (pSceneTouchEvent.isActionDown()) { setColor(0.7f, 0.7f, 0.7f); doChange = true; return true; }
@@ -216,7 +264,7 @@ public class MainScene implements IUpdateHandler {
             }
         };
 
-        final Sprite music_play = new Sprite(Config.getRES_WIDTH() - 50 * 5 + 35, 47, 40, 40, ResourceManager.getInstance().getTexture("music_play")) {
+        final Sprite music_play = new Sprite(musicButtonX(5), MUSIC_BUTTON_Y, MUSIC_BUTTON_SIZE, MUSIC_BUTTON_SIZE, ResourceManager.getInstance().getTexture("music_play")) {
             @Override
             public boolean onAreaTouched(final TouchEvent pSceneTouchEvent, final float pTouchAreaLocalX, final float pTouchAreaLocalY) {
                 if (pSceneTouchEvent.isActionDown()) { setColor(0.7f, 0.7f, 0.7f); return true; }
@@ -225,7 +273,7 @@ public class MainScene implements IUpdateHandler {
             }
         };
 
-        final Sprite music_pause = new Sprite(Config.getRES_WIDTH() - 50 * 4 + 35, 47, 40, 40, ResourceManager.getInstance().getTexture("music_pause")) {
+        final Sprite music_pause = new Sprite(musicButtonX(4), MUSIC_BUTTON_Y, MUSIC_BUTTON_SIZE, MUSIC_BUTTON_SIZE, ResourceManager.getInstance().getTexture("music_pause")) {
             @Override
             public boolean onAreaTouched(final TouchEvent pSceneTouchEvent, final float pTouchAreaLocalX, final float pTouchAreaLocalY) {
                 if (pSceneTouchEvent.isActionDown()) { setColor(0.7f, 0.7f, 0.7f); return true; }
@@ -234,7 +282,7 @@ public class MainScene implements IUpdateHandler {
             }
         };
 
-        final Sprite music_stop = new Sprite(Config.getRES_WIDTH() - 50 * 3 + 35, 47, 40, 40, ResourceManager.getInstance().getTexture("music_stop")) {
+        final Sprite music_stop = new Sprite(musicButtonX(3), MUSIC_BUTTON_Y, MUSIC_BUTTON_SIZE, MUSIC_BUTTON_SIZE, ResourceManager.getInstance().getTexture("music_stop")) {
             @Override
             public boolean onAreaTouched(final TouchEvent pSceneTouchEvent, final float pTouchAreaLocalX, final float pTouchAreaLocalY) {
                 if (pSceneTouchEvent.isActionDown()) { setColor(0.7f, 0.7f, 0.7f); doStop = true; return true; }
@@ -243,7 +291,7 @@ public class MainScene implements IUpdateHandler {
             }
         };
 
-        final Sprite music_next = new Sprite(Config.getRES_WIDTH() - 50 * 2 + 35, 47, 40, 40, ResourceManager.getInstance().getTexture("music_next")) {
+        final Sprite music_next = new Sprite(musicButtonX(2), MUSIC_BUTTON_Y, MUSIC_BUTTON_SIZE, MUSIC_BUTTON_SIZE, ResourceManager.getInstance().getTexture("music_next")) {
             @Override
             public boolean onAreaTouched(final TouchEvent pSceneTouchEvent, final float pTouchAreaLocalX, final float pTouchAreaLocalY) {
                 if (pSceneTouchEvent.isActionDown()) { setColor(0.7f, 0.7f, 0.7f); doChange = true; return true; }
@@ -260,14 +308,14 @@ public class MainScene implements IUpdateHandler {
 
         musicInfoText = new ChangeableText(0, 0, ResourceManager.getInstance().getFont("font"), "", HorizontalAlign.RIGHT, 35);
         final TextureRegion nptex = ResourceManager.getInstance().getTexture("music_np");
-        music_nowplay = new Sprite(Utils.toRes(Config.getRES_WIDTH() - 500), 0, (float) (40 * nptex.getWidth()) / nptex.getHeight(), 40, nptex);
+        music_nowplay = new Sprite(Utils.toRes(Config.getRES_WIDTH() - 500), 0, (float) (34 * nptex.getWidth()) / nptex.getHeight(), 34, nptex);
 
         for (int i = 0; i < 120; i++) {
             final float pX = (float) Config.getRES_WIDTH() / 2;
             final float pY = (float) Config.getRES_HEIGHT() / 2;
-            spectrum[i] = new Rectangle(pX, pY, 260, 10);
-            spectrum[i].setRotationCenter(0, 5);
-            spectrum[i].setScaleCenter(0, 5);
+            spectrum[i] = new Rectangle(pX, pY, SPECTRUM_BASE_LENGTH + 10f, SPECTRUM_THICKNESS);
+            spectrum[i].setRotationCenter(0, SPECTRUM_THICKNESS / 2f);
+            spectrum[i].setScaleCenter(0, SPECTRUM_THICKNESS / 2f);
             spectrum[i].setRotation(-220 + i * 3f);
             spectrum[i].setAlpha(0.0f);
             scene.attachChild(spectrum[i]);
@@ -573,7 +621,7 @@ public class MainScene implements IUpdateHandler {
         }
         if (beatPassTime >= bpmLength) {
             beatPassTime %= bpmLength;
-            if (logo != null) { logo.registerEntityModifier(new SequenceEntityModifier(new org.anddev.andengine.entity.modifier.ScaleModifier((float) (bpmLength / 1000 * 0.9f), 1f, 1.07f), new org.anddev.andengine.entity.modifier.ScaleModifier((float) (bpmLength / 1000 * 0.07f), 1.07f, 1f))); }
+            if (logo != null) { logo.registerEntityModifier(new SequenceEntityModifier(new org.anddev.andengine.entity.modifier.ScaleModifier((float) (bpmLength / 1000 * 0.9f), LOGO_SCALE, LOGO_BEAT_SCALE), new org.anddev.andengine.entity.modifier.ScaleModifier((float) (bpmLength / 1000 * 0.07f), LOGO_BEAT_SCALE, LOGO_SCALE))); }
         }
         if (GlobalManager.getInstance().getSongService() != null) {
             if (!musicStarted) {
@@ -629,7 +677,7 @@ public class MainScene implements IUpdateHandler {
                         peakLevel[i] = Math.max(peakLevel[i] - peakDownRate[i], 0f);
                         peakAlpha[i] = Math.max(peakAlpha[i] - initialAlpha / gradient, 0f);
                     }
-                    spectrum[i].setWidth(250f + peakLevel[i]);
+                    spectrum[i].setWidth(SPECTRUM_BASE_LENGTH + peakLevel[i]);
                     spectrum[i].setAlpha(peakAlpha[i]);
                 }
             } else {
@@ -804,8 +852,8 @@ public class MainScene implements IUpdateHandler {
         bg.setColor(0, 0, 0, 1.0f);
         bg.registerEntityModifier(new org.anddev.andengine.entity.modifier.AlphaModifier(3.0f, 0, 1));
         scene.attachChild(bg);
-        logo.registerEntityModifier(new ParallelEntityModifier(new RotationModifier(3.0f, 0, -15), new org.anddev.andengine.entity.modifier.ScaleModifier(3.0f, 1f, 0.8f)));
-        logoOverlay.registerEntityModifier(new ParallelEntityModifier(new RotationModifier(3.0f, 0, -15), new org.anddev.andengine.entity.modifier.ScaleModifier(3.0f, 1f, 0.8f)));
+        logo.registerEntityModifier(new ParallelEntityModifier(new RotationModifier(3.0f, 0, -15), new org.anddev.andengine.entity.modifier.ScaleModifier(3.0f, LOGO_SCALE, LOGO_SCALE * 0.8f)));
+        logoOverlay.registerEntityModifier(new ParallelEntityModifier(new RotationModifier(3.0f, 0, -15), new org.anddev.andengine.entity.modifier.ScaleModifier(3.0f, LOGO_BEAT_SCALE, LOGO_BEAT_SCALE * 0.8f)));
         if (GlobalManager.getInstance().getSongService() != null) { GlobalManager.getInstance().getSongService().stop(); }
         ScheduledExecutorService taskPool = Executors.newScheduledThreadPool(1);
         taskPool.schedule(new TimerTask() { @Override public void run() { GlobalManager.getInstance().getMainActivity().finish(); } }, 3000, TimeUnit.MILLISECONDS);
