@@ -27,6 +27,7 @@ import com.osudroid.multiplayer.Multiplayer;
 
 import com.osudroid.ui.v2.modmenu.ModMenu;
 import com.osudroid.ui.v2.RulesetModeButton;
+import com.osudroid.ui.v2.fruits.CatchGameScene;
 import com.osudroid.ui.v2.taiko.TaikoGameScene;
 import com.osudroid.GameMode;
 import com.osudroid.RulesetMode;
@@ -153,6 +154,17 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         if (songService != null) {
             songService.stop();
         }
+    }
+
+    /**
+     * Whether the given beatmap belongs to a ruleset that is still in beta.
+     *
+     * Beta rulesets deliberately keep away from anything that would outlive the run: no leaderboard,
+     * no score upload, no multiplayer. Checking the ruleset rather than naming Taiko or Catch means a
+     * future ruleset is excluded by default instead of quietly opting in.
+     */
+    private static boolean isBetaRulesetBeatmap(BeatmapInfo beatmapInfo) {
+        return RulesetMode.fromBeatmapMode(beatmapInfo.getBeatmapMode()) != RulesetMode.Droid;
     }
 
     public void setScoringScene(final ScoringScene ss) {
@@ -724,8 +736,10 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     public void toggleScoringSwitcher() {
-        if (Config.getRulesetMode() == RulesetMode.Taiko) {
-            ToastLogger.showText("Online leaderboards are disabled in osu!taiko (BETA).", false);
+        var rulesetMode = Config.getRulesetMode();
+
+        if (rulesetMode != RulesetMode.Droid) {
+            ToastLogger.showText("Online leaderboards are disabled in " + rulesetMode.displayName + ".", false);
             return;
         }
 
@@ -759,8 +773,8 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
     }
 
     public void setRulesetMode(RulesetMode rulesetMode) {
-        if (Multiplayer.isMultiplayer && rulesetMode == RulesetMode.Taiko) {
-            ToastLogger.showText("osu!taiko (BETA) is not available in multiplayer yet.", true);
+        if (Multiplayer.isMultiplayer && rulesetMode != RulesetMode.Droid) {
+            ToastLogger.showText(rulesetMode.displayName + " is not available in multiplayer yet.", true);
             return;
         }
 
@@ -1054,6 +1068,19 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             return;
         }
 
+        if (beatmapInfo.getBeatmapMode() == RulesetMode.Catch.beatmapMode) {
+            // In osu!catch, circle size sets both the fruit and the catcher size and approach rate
+            // sets how fast fruits fall, so both matter. Overall difficulty does not: there is no
+            // timing window to hit, only a horizontal position to reach.
+            beatmapDifficultyText.setText(
+                "AR: " + difficulty.getAR() + " " +
+                "CS: " + difficulty.gameplayCS + " " +
+                "HP: " + difficulty.hp + " " +
+                "Stars: " + starsStr
+            );
+            return;
+        }
+
         beatmapDifficultyText.setText(
             "AR: " + difficulty.getAR() + " " +
             "OD: " + difficulty.od + " " +
@@ -1156,8 +1183,9 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
             if (Multiplayer.isMultiplayer)
             {
-                if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
-                    ToastLogger.showText("osu!taiko (BETA) is not available in multiplayer yet.", true);
+                if (isBetaRulesetBeatmap(beatmapInfo)) {
+                    var beatmapRulesetMode = RulesetMode.fromBeatmapMode(beatmapInfo.getBeatmapMode());
+                    ToastLogger.showText(beatmapRulesetMode.displayName + " is not available in multiplayer yet.", true);
                     return;
                 }
 
@@ -1176,6 +1204,8 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
 
             if (beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode) {
                 TaikoGameScene.start(beatmapInfo, ModMenu.INSTANCE.getEnabledMods());
+            } else if (beatmapInfo.getBeatmapMode() == RulesetMode.Catch.beatmapMode) {
+                CatchGameScene.start(beatmapInfo, ModMenu.INSTANCE.getEnabledMods());
             } else {
                 game.startGame(beatmapInfo, null, ModMenu.INSTANCE.getEnabledMods());
             }
@@ -1187,7 +1217,9 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
         cancelMapStatusLoadingJob();
         updateInfo(beatmapInfo);
         updateScoringSwitcherStatus(false);
-        board.init(beatmapInfo.getBeatmapMode() == RulesetMode.Taiko.beatmapMode ? null : beatmapInfo);
+        // Beta rulesets never save or upload scores, so showing a leaderboard next to them would only
+        // promise something the run cannot deliver.
+        board.init(isBetaRulesetBeatmap(beatmapInfo) ? null : beatmapInfo);
 
         if (!reloadBG && (beatmapInfo.getBackgroundFilename() == null || backgroundPath.equals(beatmapInfo.getBackgroundPath()))) {
             return;
@@ -1720,7 +1752,7 @@ public class SongMenu implements IUpdateHandler, MenuItemListener,
             return;
         }
 
-        if (Config.getRulesetMode() == RulesetMode.Taiko || selectedBeatmap == null || !board.isShowOnlineScores()) {
+        if (Config.getRulesetMode() != RulesetMode.Droid || selectedBeatmap == null || !board.isShowOnlineScores()) {
             scoringSwitcher.setTextureRegion(ResourceManager.getInstance().getTextureIfLoaded("ranking_disabled"));
             return;
         }
