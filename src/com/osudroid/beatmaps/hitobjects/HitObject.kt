@@ -4,6 +4,7 @@ import com.osudroid.GameMode
 import com.osudroid.beatmaps.DroidHitWindow
 import com.osudroid.beatmaps.HitWindow
 import com.osudroid.beatmaps.StandardHitWindow
+import com.osudroid.beatmaps.TaikoHitWindow
 import com.osudroid.beatmaps.constants.SampleBank
 import com.osudroid.beatmaps.sections.BeatmapControlPoints
 import com.osudroid.beatmaps.sections.BeatmapDifficulty
@@ -379,11 +380,19 @@ abstract class HitObject(
         stackOffsetMultiplier = when (mode) {
             GameMode.Droid -> -4f
             GameMode.Standard -> -6.4f
+
+            // Taiko notes travel along a scrolling track instead of being placed on the playfield,
+            // so they are never stacked against each other.
+            GameMode.Taiko -> 0f
         }
 
         difficultyScale = when (mode) {
             GameMode.Droid -> CircleSizeCalculator.droidCSToDroidScale(difficulty.difficultyCS)
             GameMode.Standard -> CircleSizeCalculator.standardCSToStandardScale(difficulty.gameplayCS, true)
+
+            // Circle size has no meaning in osu!taiko, but difficulty calculation still divides by the
+            // object radius, so the osu!standard scale is kept to leave that arithmetic well defined.
+            GameMode.Taiko -> CircleSizeCalculator.standardCSToStandardScale(difficulty.gameplayCS, true)
         }
 
         gameplayScale = difficultyScale
@@ -473,6 +482,7 @@ abstract class HitObject(
     protected open fun createHitWindow(mode: GameMode): HitWindow? = when (mode) {
         GameMode.Droid -> DroidHitWindow(null)
         GameMode.Standard -> StandardHitWindow(null)
+        GameMode.Taiko -> TaikoHitWindow(null)
     }
 
     companion object {
