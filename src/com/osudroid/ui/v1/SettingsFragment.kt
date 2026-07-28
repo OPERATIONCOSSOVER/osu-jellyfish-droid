@@ -42,6 +42,7 @@ import com.osudroid.multiplayer.api.data.RoomTeam
 import com.osudroid.multiplayer.api.data.TeamMode
 import com.osudroid.multiplayer.api.data.WinCondition
 import com.osudroid.resources.R.string
+import com.osudroid.ui.ThemeSongManager
 import com.osudroid.utils.async
 import com.osudroid.utils.mainThread
 import com.reco1l.framework.asTimeInterpolator
@@ -141,6 +142,67 @@ class SettingsFragment : SettingsFragment() {
                     StringTable.format(string.replay_import_result, importedCount, uris.size),
                     5000
                 ).show()
+            }
+        }
+    }
+
+
+    /**
+     * Picks the .osz the main menu should use as its intro theme instead of the bundled one.
+     *
+     * The picked file is copied next to the bundled theme rather than referenced in place, so the
+     * import survives the content URI being revoked and the app being restarted.
+     */
+    private val themeOszPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@registerForActivityResult
+
+        val loading = LoadingFragment()
+        loading.show()
+
+        async {
+            val context = requireContext()
+            val decorView = requireActivity().window.decorView
+
+            try {
+                val destination = ThemeSongManager.getCustomOszDestination()
+                destination.parentFile?.mkdirs()
+
+                context.contentResolver.openInputStream(uri)!!.use { input ->
+                    destination.outputStream().use { output -> input.copyTo(output) }
+                }
+
+                ThemeSongManager.setCustomOsz(destination)
+
+                // Extract now rather than on the next menu return, so a .osz holding no audio is
+                // reported while the player is still looking at the setting.
+                val extracted = ThemeSongManager.ensureExtracted()
+
+                mainThread {
+                    loading.dismiss()
+
+                    if (extracted == null) {
+                        ThemeSongManager.clearCustomOsz()
+
+                        Snackbar.make(decorView, "That .osz does not contain an audio track.", 3000).show()
+                    } else {
+                        ThemeSongManager.restart()
+                        updateThemeSongSummary()
+
+                        Snackbar.make(decorView, "Intro theme updated.", 2000).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SettingsFragment", "Failed to import theme .osz from $uri", e)
+
+                mainThread {
+                    loading.dismiss()
+
+                    Snackbar.make(
+                        decorView,
+                        "Could not import that .osz: " + (e.message ?: "Unknown error"),
+                        3000
+                    ).show()
+                }
             }
         }
     }
@@ -377,7 +439,38 @@ class SettingsFragment : SettingsFragment() {
     }
 
 
+    /**
+     * Shows which .osz the intro theme is currently coming from.
+     *
+     * Safe to call while another section is bound: the lookups simply return null.
+     */
+    private fun updateThemeSongSummary() {
+        val preference = findPreference<Preference>("themeSongCustom") ?: return
+
+        preference.summary = ThemeSongManager.getCustomOszName() ?: "Using the bundled theme"
+    }
+
+
     private fun handleGraphicsSectionPreferences() {
+
+        // Handled before the HUD editor below, which returns early when in multiplayer.
+        updateThemeSongSummary()
+
+        findPreference<Preference>("themeSongCustom")!!.setOnPreferenceClickListener {
+            // .osz has no registered MIME type, so anything has to be selectable.
+            themeOszPicker.launch("*/*")
+            true
+        }
+
+        findPreference<Preference>("themeSongCustomClear")!!.setOnPreferenceClickListener {
+            ThemeSongManager.clearCustomOsz()
+            ThemeSongManager.restart()
+            updateThemeSongSummary()
+
+            ToastLogger.showText("Intro theme reset to the bundled one.", true)
+            true
+        }
+
         findPreference<SelectPreference>("skinPath")!!.apply {
 
             val skinMain = File(Config.getSkinTopPath())
