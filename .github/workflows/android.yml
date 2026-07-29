@@ -57,8 +57,8 @@ jobs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: 20260727-taiko-beta.4
-        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 4
+        RELEASE_TAG: 20260727-taiko-beta.12.5
+        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 12.5
         RELEASE_TARGET: ${{ github.event.pull_request.head.sha }}
       run: |
         mapfile -t apks < <(
@@ -71,34 +71,29 @@ jobs:
         fi
 
         cat > release-notes.md <<'EOF'
-        ## osu!jellyfish 20260727 Taiko Beta 4
+        ## osu!jellyfish 20260727 Taiko Beta 12.5
 
-        ### osu!taiko scrolling and hit feedback
+        ### osu!taiko star ratings
 
-        - Scroll speed is now resolved per object from the beatmap's timing and difficulty
-          control points, so BPM changes and slider velocity changes are respected. Previously
-          every note took a fixed 1.65s to cross the lane regardless of the map.
-        - Hit windows follow the documented spec, including a real miss window. Notes now expire
-          on the miss window rather than being discarded at the OK boundary.
-        - Hit explosions are anchored to the judgement circle instead of following the note, and
-          use normal rather than additive blending.
-        - Hit notes fly away toward the health bar; missed notes keep scrolling and fade out.
-        - Fixed autoplay drumroll and denden throttles that compared millisecond song positions
-          against second-scale values, causing autoplay to fire every frame.
-        - The health gauge now starts empty, matching taiko.
+        - Taiko beatmaps now carry their own star rating, ported from osu!taiko's colour, rhythm
+          and stamina skills, instead of borrowing the osu!standard number.
+        - Song select shows taiko-appropriate statistics for taiko beatmaps: overall difficulty,
+          HP and the taiko star rating, rather than approach rate and circle size, neither of
+          which taiko uses.
+        - Ratings are cached per beatmap and recalculated automatically when the algorithm
+          version changes.
 
-        ### Seasonal backgrounds
+        ### Menu effects
 
-        - New **Background** section in Graphics settings with a seasonal backgrounds toggle.
-        - Images are read from an `osu!droid/SeasonalBackgrounds/` folder, which may either hold
-          images directly or contain `Winter`, `Spring`, `Summer` and `Autumn` subfolders. A
-          subfolder matching the current season wins; otherwise loose images are used.
-        - Optional slideshow that crossfades between the images in the folder, with a
-          configurable interval (5-300 seconds, default 30).
-        - `.png`, `.jpg`, `.jpeg` and `.bmp` are accepted. The toggle is off by default, and the
-          game falls back to the normal background when the folder is missing or empty.
-        - The folder is not created for you, and it is scanned once per session, so add images
-          before launching the game.
+        - New toggles in Graphics settings for the main menu snowfall effect and the menu
+          parallax effect. Both were previously always on with no way to turn them off.
+
+        ### Fixes
+
+        - Fixed a compile regression where introducing the taiko ruleset left several game mode
+          branches incomplete.
+        - Restored the unit test suite, which had stopped compiling and therefore stopped running
+          entirely while still reporting as a failure.
 
         Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko multiplayer,
         online leaderboards, replay storage, and score uploads are disabled.
