@@ -21,6 +21,7 @@ object ModUtils {
      */
     val allModsInstances by lazy {
         arrayOf(
+            ModAdaptiveSpeed(),
             ModApproachDifferent(),
             ModAutoplay(),
             ModAutopilot(),

@@ -12,6 +12,7 @@ import com.osudroid.beatmaps.HitWindow;
 import com.osudroid.beatmaps.constants.HitObjectType;
 import com.osudroid.beatmaps.hitobjects.HitCircle;
 import com.osudroid.game.GameplayHitSampleInfo;
+import com.osudroid.mods.ModAdaptiveSpeed;
 import com.osudroid.mods.ModHidden;
 import com.osudroid.mods.ModObjectScaleTween;
 import com.osudroid.mods.ModWiggle;
@@ -57,6 +58,11 @@ public class GameplayHitCircle extends GameObject {
     private float wiggleOriginY;
 
     /**
+     * The active Adaptive Speed mod, or {@code null} if it is not enabled.
+     */
+    private ModAdaptiveSpeed adaptiveSpeed;
+
+    /**
      * The circle piece that represents the circle body and overlay.
      */
     private final NumberedCirclePiece circlePiece;
@@ -92,6 +98,10 @@ public class GameplayHitCircle extends GameObject {
         } else {
             wiggleTrail = null;
         }
+
+        // Unconditionally assigned, since objects are pooled and a leftover reference would keep
+        // reporting judgements after the mod had been switched off.
+        adaptiveSpeed = GameHelper.getAdaptiveSpeed(listener);
 
         float mehWindow = (float) beatmapCircle.hitWindow.getMehWindow() / 1000;
         hitOffset = mehWindow;
@@ -268,6 +278,26 @@ public class GameplayHitCircle extends GameObject {
         approachCircle.setPosition(position.x, position.y);
     }
 
+    /**
+     * Reports this circle's judgement to the Adaptive Speed mod, which uses how early or late the
+     * hit was to decide where to take the track rate next.
+     *
+     * @param offsetSeconds How far from the circle's start time the hit landed, in seconds.
+     *                      Ignored for misses, which apply a fixed slowdown instead.
+     * @param isHit Whether the circle was actually hit.
+     */
+    private void notifyAdaptiveSpeed(final float offsetSeconds, final boolean isHit) {
+        if (adaptiveSpeed == null) {
+            return;
+        }
+
+        adaptiveSpeed.onObjectJudged(
+            beatmapCircle.getEndTime(),
+            beatmapCircle.startTime + offsetSeconds * 1000d,
+            isHit
+        );
+    }
+
     @Override
     public void update(final float dt) {
         if (beatmapCircle.hitWindow == null) {
@@ -293,6 +323,7 @@ public class GameplayHitCircle extends GameObject {
                 listener.registerAccuracy(HitObjectType.Normal, hitOffset);
                 startHit = true;
                 successfulHit = Math.abs(hitOffset) <= mehWindow;
+                notifyAdaptiveSpeed(hitOffset, successfulHit);
                 // Remove circle and register hit in update thread
                 listener.onCircleHit(id, hitOffset, position, endsCombo, replayObjectData.result, comboColor);
                 if (successfulHit && !listener.isAfterSeek()) {
@@ -309,6 +340,7 @@ public class GameplayHitCircle extends GameObject {
                 listener.registerAccuracy(HitObjectType.Normal, hitOffset);
                 startHit = true;
                 successfulHit = Math.abs(hitOffset) <= mehWindow;
+                notifyAdaptiveSpeed(hitOffset, successfulHit);
                 // Remove circle and register hit in update thread
                 listener.onCircleHit(id, hitOffset, position, endsCombo, (byte) 0, comboColor);
                 if (successfulHit) {
@@ -358,6 +390,7 @@ public class GameplayHitCircle extends GameObject {
                 startHit = true;
                 final byte forcedScore = (replayObjectData == null) ? 0 : replayObjectData.result;
 
+                notifyAdaptiveSpeed(0, false);
                 removeFromScene();
                 listener.registerAccuracy(HitObjectType.Normal, mehWindow + 1);
                 listener.onCircleHit(id, 10, position, false, forcedScore, comboColor);
