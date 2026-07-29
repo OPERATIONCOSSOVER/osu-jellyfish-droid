@@ -384,6 +384,26 @@ public class GameHelper {
         return grow != null ? grow : mods.ofType(ModDeflate.class);
     }
 
+    /**
+     * Gets the active {@link ModWiggle}, if any.
+     * <p>
+     * Resolved from the running {@link GameScene} for the same reason as
+     * {@link #getObjectScaleTween(GameObjectListener)}: a stale static field would silently keep
+     * wiggling objects on a later play after the mod had been switched off.
+     *
+     * @param listener The gameplay listener the object was initialized with.
+     * @return The active {@link ModWiggle}, or {@code null} if it is not enabled.
+     */
+    public static ModWiggle getWiggle(final GameObjectListener listener) {
+        if (!(listener instanceof GameScene gameScene) || gameScene.stat == null) {
+            return null;
+        }
+
+        var mods = gameScene.stat.getMod();
+
+        return mods == null ? null : mods.ofType(ModWiggle.class);
+    }
+
     public static ModScoreV2 getScoreV2() {
         return scoreV2;
     }
