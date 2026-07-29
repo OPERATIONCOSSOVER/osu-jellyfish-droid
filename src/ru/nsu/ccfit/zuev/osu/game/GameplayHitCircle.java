@@ -14,15 +14,24 @@ import com.osudroid.beatmaps.hitobjects.HitCircle;
 import com.osudroid.game.GameplayHitSampleInfo;
 import com.osudroid.mods.ModHidden;
 import com.osudroid.mods.ModObjectScaleTween;
+import com.osudroid.mods.ModWiggle;
 
 import java.util.ArrayList;
 
 import ru.nsu.ccfit.zuev.osu.Config;
+import ru.nsu.ccfit.zuev.osu.Constants;
 import ru.nsu.ccfit.zuev.osu.ResourceManager;
 import ru.nsu.ccfit.zuev.osu.scoring.ResultType;
 import ru.nsu.ccfit.zuev.skins.OsuSkin;
 
 public class GameplayHitCircle extends GameObject {
+
+    /**
+     * Converts an osu!pixels offset to screen space. The Wiggle mod works in osu!pixels so that it
+     * does not need to know how the playfield is laid out.
+     */
+    private static final float OSU_PIXEL_TO_SCREEN_X = (float) Constants.MAP_ACTUAL_WIDTH / Constants.MAP_WIDTH;
+    private static final float OSU_PIXEL_TO_SCREEN_Y = (float) Constants.MAP_ACTUAL_HEIGHT / Constants.MAP_HEIGHT;
 
     private final UISprite approachCircle;
     private Color4 comboColor = new Color4();
@@ -35,6 +44,17 @@ public class GameplayHitCircle extends GameObject {
     private boolean kiai;
     private boolean successfulHit;
     private final ArrayList<GameplayHitSampleInfo> hitSamples = new ArrayList<>(5);
+
+    /**
+     * The precomputed Wiggle movement of this circle, or {@code null} if the mod is not enabled.
+     */
+    private ModWiggle.WiggleTrail wiggleTrail;
+
+    /**
+     * The position this circle would occupy if it were not wiggling.
+     */
+    private float wiggleOriginX;
+    private float wiggleOriginY;
 
     /**
      * The circle piece that represents the circle body and overlay.
@@ -61,6 +81,17 @@ public class GameplayHitCircle extends GameObject {
         this.listener = listener;
         scene = pScene;
         timePreempt = (float) beatmapCircle.timePreempt / 1000;
+
+        // Circles have no duration, so they only wiggle while they are approaching.
+        var wiggle = GameHelper.getWiggle(listener);
+
+        if (wiggle != null) {
+            wiggleTrail = wiggle.createTrail(beatmapCircle.startTime, beatmapCircle.timePreempt, 0);
+            wiggleOriginX = this.position.x;
+            wiggleOriginY = this.position.y;
+        } else {
+            wiggleTrail = null;
+        }
 
         float mehWindow = (float) beatmapCircle.hitWindow.getMehWindow() / 1000;
         hitOffset = mehWindow;
@@ -215,6 +246,28 @@ public class GameplayHitCircle extends GameObject {
         listener.playHitSamples(hitSamples);
     }
 
+    /**
+     * Moves this circle to where the Wiggle mod says it should be right now.
+     * <p>
+     * The offset is applied to {@link #position} and not just to the sprites, because that is what
+     * hit detection reads. In osu!lazer the drawable itself is moved, so its hit area moves with it.
+     */
+    private void applyWiggle() {
+        if (wiggleTrail == null) {
+            return;
+        }
+
+        wiggleTrail.computeOffsetAt(listener.getElapsedTime() * 1000d);
+
+        position.set(
+            wiggleOriginX + wiggleTrail.offsetX * OSU_PIXEL_TO_SCREEN_X,
+            wiggleOriginY + wiggleTrail.offsetY * OSU_PIXEL_TO_SCREEN_Y
+        );
+
+        circlePiece.setPosition(position.x, position.y);
+        approachCircle.setPosition(position.x, position.y);
+    }
+
     @Override
     public void update(final float dt) {
         if (beatmapCircle.hitWindow == null) {
@@ -227,6 +280,9 @@ public class GameplayHitCircle extends GameObject {
         }
 
         passedTime = listener.getElapsedTime() - hitTime;
+
+        // Applied before hit detection so that the hit area matches what is on screen this frame.
+        applyWiggle();
 
         double mehWindow = beatmapCircle.hitWindow.getMehWindow() / 1000;
 

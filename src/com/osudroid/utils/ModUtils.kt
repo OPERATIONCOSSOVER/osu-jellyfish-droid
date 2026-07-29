@@ -50,6 +50,7 @@ object ModUtils {
             ModSuddenDeath(),
             ModSynesthesia(),
             ModTraceable(),
+            ModWiggle(),
             ModWindDown(),
             ModWindUp()
         )
