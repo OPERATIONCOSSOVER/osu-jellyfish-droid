@@ -57,8 +57,8 @@ jobs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: 20260727-taiko-beta.4
-        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 4
+        RELEASE_TAG: 20260727-taiko-beta.12.6
+        RELEASE_TITLE: osu!jellyfish 20260727 Taiko Beta 12.6
         RELEASE_TARGET: ${{ github.event.pull_request.head.sha }}
       run: |
         mapfile -t apks < <(
@@ -71,34 +71,36 @@ jobs:
         fi
 
         cat > release-notes.md <<'EOF'
-        ## osu!jellyfish 20260727 Taiko Beta 4
+        ## osu!jellyfish 20260727 Taiko Beta 12.6
 
-        ### osu!taiko scrolling and hit feedback
+        ### Swells now behave like osu!lazer
 
-        - Scroll speed is now resolved per object from the beatmap's timing and difficulty
-          control points, so BPM changes and slider velocity changes are respected. Previously
-          every note took a fixed 1.65s to cross the lane regardless of the map.
-        - Hit windows follow the documented spec, including a real miss window. Notes now expire
-          on the miss window rather than being discarded at the OK boundary.
-        - Hit explosions are anchored to the judgement circle instead of following the note, and
-          use normal rather than additive blending.
-        - Hit notes fly away toward the health bar; missed notes keep scrolling and fade out.
-        - Fixed autoplay drumroll and denden throttles that compared millisecond song positions
-          against second-scale values, causing autoplay to fire every frame.
-        - The health gauge now starts empty, matching taiko.
+        - **Swells are part of the lane again.** A denden used to appear at its start time
+          pinned to the middle of the screen, wearing the osu!standard spinner graphics. It
+          now scrolls in from the right like every other note and stops on the hit target,
+          staying under your fingers for the whole time you are alternating on it.
+        - Replaced the spinner sprites with lazer's ring presentation: a target ring that
+          grows to full size shortly after the swell lands, and an expanding ring that
+          widens and brightens as the counter fills, so progress reads from the shape of the
+          swell rather than only from the number in the middle.
 
-        ### Seasonal backgrounds
+        ### Drum roll fixes
 
-        - New **Background** section in Graphics settings with a seasonal backgrounds toggle.
-        - Images are read from an `osu!droid/SeasonalBackgrounds/` folder, which may either hold
-          images directly or contain `Winter`, `Spring`, `Summer` and `Autumn` subfolders. A
-          subfolder matching the current season wins; otherwise loose images are used.
-        - Optional slideshow that crossfades between the images in the folder, with a
-          configurable interval (5-300 seconds, default 30).
-        - `.png`, `.jpg`, `.jpeg` and `.bmp` are accepted. The toggle is off by default, and the
-          game falls back to the normal background when the folder is missing or empty.
-        - The folder is not created for you, and it is scanned once per session, so add images
-          before launching the game.
+        - **Rolls are no longer drawn half a length early.** The body was centred on the
+          roll's start time, so half of every roll sat before the roll actually began. It is
+          now anchored by its head and extends forward toward the end.
+        - The body is drawn one full height longer than its duration, so its rounded caps sit
+          outside the head and tail instead of being clipped.
+        - Added a distinct head piece over the start of the body.
+        - The body and head warm from an idle to an engaged colour as ticks are collected and
+          cool back down when ticks are dropped, giving immediate feedback on whether the
+          roll is actually being hit.
+
+        ### Note on 12.5
+
+        Beta 12.5 was built from master and therefore contained no gameplay changes over
+        12.4 despite its release notes. This build is cut from the branch that carries the
+        work, so the changes above are genuinely in the APK.
 
         Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko multiplayer,
         online leaderboards, replay storage, and score uploads are disabled.
