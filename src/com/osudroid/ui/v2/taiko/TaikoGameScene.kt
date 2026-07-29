@@ -120,10 +120,21 @@ class TaikoGameScene private constructor(
         var ticksHit: Int = 0,
         /** Drumroll only: half the tick spacing, which is the window a tick can be hit within. */
         var tickWindow: Double = 50.0,
-        /** Denden only: the countdown label drawn in the middle of the spinner. */
+        /** Denden only: the countdown label drawn in the middle of the swell. */
         var counterText: UIText? = null,
-        /** Denden only: the shrinking approach circle. */
-        var approachSprite: UIComponent? = null
+        /** Denden only: the thin outline the player is filling towards. */
+        var swellTargetRing: UICircle? = null,
+        /** Denden only: the filled ring that grows outwards as the counter fills. */
+        var swellExpandingRing: UICircle? = null,
+        /** Drumroll only: the elongated body, recoloured as the roll is played. */
+        var rollBody: UIBox? = null,
+        /** Drumroll only: the round head drawn over the start of the body. */
+        var rollHead: UICircle? = null,
+        /**
+         * Drumroll only: a rolling count of collected ticks, clamped to [ROLL_ENGAGED_HITS]. It
+         * rises on a collected tick and falls on a dropped one, and is what drives the body colour.
+         */
+        var rollingHits: Int = 0
     )
 
     /**
@@ -159,11 +170,17 @@ class TaikoGameScene private constructor(
     private val judgementBaseY = laneBottom + 10f
 
     /**
-     * Size of the denden spinner. Dendens are drawn as the standard spinner in the middle of the
-     * screen rather than as a note travelling down the lane, so this is sized against the screen
-     * rather than against the lane.
+     * Size of a denden's centre circle. osu!lazer draws a swell as an ordinary taiko object that
+     * travels down the lane and parks on the hit target, so it is sized against the lane like any
+     * other note rather than against the screen.
      */
-    private val dendenDiameter = screenHeight * 0.55f
+    private val swellDiameter = laneHeight * 0.52f
+
+    /** The widest a denden's rings ever grow, which is what sizes its entity box. */
+    private val swellRingMaxDiameter = swellDiameter * SWELL_RING_MAX_SCALE
+
+    /** Height of a drum roll body, and therefore the diameter of its head. */
+    private val rollHeight = laneHeight * 0.34f
 
     /** Distance a note travels from spawn to the judgement circle. */
     private val travelDistance = spawnX - targetX
@@ -626,10 +643,6 @@ class TaikoGameScene private constructor(
                 songService.seekTo(0)
 
                 updateThread {
-                    // Dendens are drawn with the standard spinner textures, which are loaded
-                    // lazily. Without this the spinner sprites would come back blank.
-                    resources.checkSpinnerTextures()
-
                     objects = taikoObjects
                     firstActiveIndex = 0
                     greatWindow = calculatedGreatWindow
@@ -907,13 +920,9 @@ class TaikoGameScene private constructor(
                 continue
             }
 
-            // A denden is not a travelling note, so it appears when it starts rather than
-            // scrolling in from the right.
-            val spawnTime = if (obj.kind == ObjectKind.Denden) {
-                obj.startTime
-            } else {
-                obj.startTime - obj.preempt
-            }
+            // Every object scrolls in from the right, dendens included. osu!lazer treats a swell
+            // as an ordinary scrolling object that simply stops once it reaches the hit target.
+            val spawnTime = obj.startTime - obj.preempt
 
             if (obj.entity == null && now >= spawnTime && now <= obj.endTime + missWindow) {
                 val entity = createObjectEntity(obj)
@@ -922,15 +931,29 @@ class TaikoGameScene private constructor(
             }
 
             obj.entity?.let { entity ->
-                if (obj.kind == ObjectKind.Denden) {
-                    // Pinned to the centre of the screen, exactly like the standard spinner.
-                    entity.x = screenWidth / 2f - entity.width / 2f
-                    entity.y = screenHeight / 2f - entity.height / 2f
-                    updateDendenApproach(obj, now)
-                } else {
-                    val x = targetX + ((obj.startTime - now) * obj.velocity).toFloat()
-                    entity.x = x - entity.width / 2f
-                    entity.y = laneY - entity.height / 2f
+                val x = targetX + ((obj.startTime - now) * obj.velocity).toFloat()
+
+                when (obj.kind) {
+                    ObjectKind.Denden -> {
+                        // The swell travels in like any other object but stops dead on the hit
+                        // target rather than sailing past it, so it stays under the player's
+                        // fingers for the whole time they are alternating on it.
+                        entity.x = x.coerceAtLeast(targetX) - entity.width / 2f
+                        entity.y = laneY - entity.height / 2f
+                        updateSwellVisuals(obj, now)
+                    }
+
+                    ObjectKind.Drumroll -> {
+                        // A roll is anchored by its head rather than centred on its start time,
+                        // so its body extends forward towards the end of the roll.
+                        entity.x = x - rollHeight / 2f
+                        entity.y = laneY - entity.height / 2f
+                    }
+
+                    else -> {
+                        entity.x = x - entity.width / 2f
+                        entity.y = laneY - entity.height / 2f
+                    }
                 }
             }
 
@@ -957,17 +980,45 @@ class TaikoGameScene private constructor(
         }
     }
 
-    /** Shrinks the denden's approach circle towards its centre as the denden runs out of time. */
-    private fun updateDendenApproach(obj: TaikoObject, now: Double) {
-        val approach = obj.approachSprite ?: return
-        val duration = (obj.endTime - obj.startTime).coerceAtLeast(1.0)
-        val progress = ((now - obj.startTime) / duration).coerceIn(0.0, 1.0).toFloat()
-        val diameter = dendenDiameter * (1f - progress)
+    /**
+     * Drives a denden's two rings.
+     *
+     * The target ring is the fixed outline the player is filling towards: it eases out to full
+     * size shortly after the swell lands on the hit target and then holds. The expanding ring
+     * grows and brightens out of the centre as the counter fills, so progress reads from the shape
+     * of the swell rather than only from the number in the middle.
+     */
+    private fun updateSwellVisuals(obj: TaikoObject, now: Double) {
+        obj.swellTargetRing?.let { ring ->
+            val elapsed = now - obj.startTime - SWELL_RING_APPEAR_OFFSET
+            val grow = (elapsed / SWELL_RING_GROW_DURATION).coerceIn(0.0, 1.0).toFloat()
 
-        approach.width = diameter
-        approach.height = diameter
-        approach.x = (dendenDiameter - diameter) / 2f
-        approach.y = (dendenDiameter - diameter) / 2f
+            // Ease out, so the ring arrives quickly and settles rather than creeping outwards.
+            val eased = 1f - (1f - grow) * (1f - grow)
+
+            resizeCentred(ring, swellDiameter + (swellRingMaxDiameter - swellDiameter) * eased)
+        }
+
+        obj.swellExpandingRing?.let { ring ->
+            val completion = if (obj.requiredHits <= 0) {
+                0f
+            } else {
+                (obj.hitsSoFar.toFloat() / obj.requiredHits).coerceIn(0f, 1f)
+            }
+
+            val reach = (completion * 1.3f).coerceAtMost(1f)
+
+            resizeCentred(ring, swellDiameter + (swellRingMaxDiameter - swellDiameter) * reach)
+            ring.alpha = (completion * 0.55f).coerceIn(0f, 0.55f)
+        }
+    }
+
+    /** Resizes a denden ring while keeping it centred inside the denden's entity box. */
+    private fun resizeCentred(component: UIComponent, diameter: Float) {
+        component.width = diameter
+        component.height = diameter
+        component.x = (swellRingMaxDiameter - diameter) / 2f
+        component.y = (swellRingMaxDiameter - diameter) / 2f
     }
 
     private fun processAutoPlay(now: Double) {
@@ -1079,53 +1130,86 @@ class TaikoGameScene private constructor(
             }
         }
 
-        ObjectKind.Drumroll -> UIBox().apply {
-            // Length follows the object's own scroll speed so the body matches its duration.
+        ObjectKind.Drumroll -> UIContainer().apply {
+            // osu!lazer draws the body one full height longer than the roll's duration, which is
+            // what pushes the rounded caps outside the head and tail instead of clipping them.
             val durationWidth = max(
                 80f,
                 ((obj.endTime - obj.startTime) * obj.velocity).toFloat()
             )
-            width = durationWidth
-            height = laneHeight * 0.34f
-            cornerRadius = height / 2f
-            color = Color4(0xFFFF7043)
-            alpha = 0.88f
+
+            width = durationWidth + rollHeight
+            height = rollHeight
+
+            obj.rollBody = box {
+                x = 0f
+                y = 0f
+                width = durationWidth + rollHeight
+                height = rollHeight
+                cornerRadius = rollHeight / 2f
+                color = rollColour(0)
+                alpha = 0.9f
+            }
+
+            // The head is what the player actually strikes, so it sits over the body.
+            obj.rollHead = circle {
+                x = 0f
+                y = 0f
+                width = rollHeight
+                height = rollHeight
+                color = rollColour(0)
+            }
         }
 
-        // Dendens use the standard spinner presentation rather than a long note, matching how
-        // osu! itself renders them: a fixed spinner in the middle of the screen with a shrinking
-        // approach circle and a countdown of the hits still needed.
+        // osu!lazer draws a swell as a lane object rather than as an osu!standard spinner: a
+        // centre circle ringed by a target outline, parked on the hit target while the player
+        // alternates on it.
         ObjectKind.Denden -> UIContainer().apply {
-            width = dendenDiameter
-            height = dendenDiameter
+            width = swellRingMaxDiameter
+            height = swellRingMaxDiameter
 
-            sprite {
-                width = dendenDiameter
-                height = dendenDiameter
-                scaleType = ScaleType.Fit
-                textureRegion = resources.getTexture("spinner-background")
-                alpha = 0.85f
+            obj.swellExpandingRing = circle {
+                x = (swellRingMaxDiameter - swellDiameter) / 2f
+                y = (swellRingMaxDiameter - swellDiameter) / 2f
+                width = swellDiameter
+                height = swellDiameter
+                color = SWELL_RING_COLOR
+                alpha = 0f
             }
 
-            sprite {
-                width = dendenDiameter
-                height = dendenDiameter
-                scaleType = ScaleType.Fit
-                textureRegion = resources.getTexture("spinner-circle")
+            obj.swellTargetRing = circle {
+                x = (swellRingMaxDiameter - swellDiameter) / 2f
+                y = (swellRingMaxDiameter - swellDiameter) / 2f
+                width = swellDiameter
+                height = swellDiameter
+                color = SWELL_TARGET_RING_COLOR
+                alpha = 0.55f
+                paintStyle = PaintStyle.Outline
+                lineWidth = 5f
             }
 
-            obj.approachSprite = sprite {
-                width = dendenDiameter
-                height = dendenDiameter
-                scaleType = ScaleType.Fit
-                textureRegion = resources.getTexture("spinner-approachcircle")
+            circle {
+                x = (swellRingMaxDiameter - swellDiameter) / 2f
+                y = (swellRingMaxDiameter - swellDiameter) / 2f
+                width = swellDiameter
+                height = swellDiameter
+                color = Color4.White
+            }
+
+            circle {
+                val inner = swellDiameter - 10f
+                x = (swellRingMaxDiameter - inner) / 2f
+                y = (swellRingMaxDiameter - inner) / 2f
+                width = inner
+                height = inner
+                color = SWELL_CENTRE_COLOR
             }
 
             obj.counterText = text {
-                y = dendenDiameter / 2f - 30f
-                width = dendenDiameter
+                y = swellRingMaxDiameter / 2f - 20f
+                width = swellRingMaxDiameter
                 alignment = Anchor.TopCenter
-                font = resources.getFont("bigFont")
+                font = resources.getFont("middleFont")
                 color = Color4.White
                 text = obj.requiredHits.toString()
             }
@@ -1259,7 +1343,8 @@ class TaikoGameScene private constructor(
 
         obj.judged = true
         obj.counterText = null
-        obj.approachSprite = null
+        obj.swellTargetRing = null
+        obj.swellExpandingRing = null
 
         obj.entity?.let { entity ->
             decayingEntities.add(
@@ -1285,7 +1370,8 @@ class TaikoGameScene private constructor(
         }
 
         obj.counterText = null
-        obj.approachSprite = null
+        obj.swellTargetRing = null
+        obj.swellExpandingRing = null
         expire(obj)
     }
 
@@ -1295,7 +1381,7 @@ class TaikoGameScene private constructor(
      * Drum rolls are not scored on raw tapping speed: they carry discrete ticks, and a tap only
      * counts if it lands within half a tick spacing of the next uncollected tick. Tapping faster
      * than the ticks appear collects nothing extra, and tapping too slowly simply lets ticks go by.
-     * Missed ticks carry no penalty at all.
+     * Missed ticks carry no score penalty, but they do cool the body's colour back down.
      */
     private fun registerRollHit(obj: TaikoObject, isKat: Boolean, now: Double) {
         playInputSound(isKat, now)
@@ -1307,6 +1393,8 @@ class TaikoGameScene private constructor(
             now > obj.tickTimes[obj.nextTickIndex] + obj.tickWindow
         ) {
             obj.nextTickIndex++
+            obj.rollingHits = (obj.rollingHits - 1).coerceAtLeast(0)
+            updateRollColour(obj)
         }
 
         if (obj.nextTickIndex >= obj.tickTimes.size) {
@@ -1320,9 +1408,35 @@ class TaikoGameScene private constructor(
 
         obj.nextTickIndex++
         obj.ticksHit++
+        obj.rollingHits = (obj.rollingHits + 1).coerceAtMost(ROLL_ENGAGED_HITS)
+        updateRollColour(obj)
         rollHits++
         score += if (obj.isBig) BIG_ROLL_TICK_SCORE else ROLL_TICK_SCORE
         showJudgement("ROLL", Color4(0xFFFFC107))
+    }
+
+    /**
+     * Repaints a drum roll to match how well it is being played.
+     *
+     * osu!lazer ramps the body from an idle to an engaged colour over the last few ticks, which is
+     * immediate feedback on whether the roll is actually being collected.
+     */
+    private fun updateRollColour(obj: TaikoObject) {
+        val colour = rollColour(obj.rollingHits)
+
+        obj.rollBody?.color = colour
+        obj.rollHead?.color = colour
+    }
+
+    /** Blends between the idle and engaged drum roll colours. */
+    private fun rollColour(rollingHits: Int): Color4 {
+        val t = (rollingHits.toFloat() / ROLL_ENGAGED_HITS).coerceIn(0f, 1f)
+
+        val red = (0xFB + (0xF9 - 0xFB) * t).toInt().toLong()
+        val green = (0xC0 + (0xA8 - 0xC0) * t).toInt().toLong()
+        val blue = (0x2D + (0x25 - 0x2D) * t).toInt().toLong()
+
+        return Color4(0xFF000000L or (red shl 16) or (green shl 8) or blue)
     }
 
     /**
@@ -1739,30 +1853,21 @@ class TaikoGameScene private constructor(
          */
         private const val SWELL_HIT_MULTIPLIER = 1.65
 
-        /** Each counted denden hit is worth a flat score, with no timing or combo scaling. */
-        private const val DENDEN_HIT_SCORE = 300L
+        /**
+         * How far a denden's rings grow beyond its centre circle. osu!lazer uses 5x, which only
+         * fits because its playfield is far taller than this lane; this is the largest ring that
+         * stays inside the lane.
+         */
+        private const val SWELL_RING_MAX_SCALE = 1.9f
 
-        /** Clearing a denden pays out like a large note. */
-        private const val DENDEN_COMPLETE_SCORE = 600L
+        /**
+         * Delay after a denden lands on the hit target before its target ring starts growing, in
+         * milliseconds. Matches osu!lazer's ring_appear_offset.
+         */
+        private const val SWELL_RING_APPEAR_OFFSET = 100.0
 
-        /** Drum roll ticks pay a flat bonus; large rolls pay considerably more. */
-        private const val ROLL_TICK_SCORE = 300L
-        private const val BIG_ROLL_TICK_SCORE = 720L
+        /** How long a denden's target ring takes to reach full size, in milliseconds. */
+        private const val SWELL_RING_GROW_DURATION = 400.0
 
-        /** Autoplay denden tap interval, in milliseconds to match song position units. */
-        private const val AUTO_DENDEN_INTERVAL = 50.0
-
-        @JvmStatic
-        @JvmOverloads
-        fun start(beatmapInfo: BeatmapInfo, mods: ModHashMap = ModHashMap()) {
-            if (beatmapInfo.beatmapMode != 1) {
-                ToastLogger.showText("This is not a native osu!taiko beatmap.", true)
-                return
-            }
-
-            TaikoGameScene(beatmapInfo, mods).also {
-                it.beginLoadingWithLoader()
-            }
-        }
-    }
-}
+        private val SWELL_RING_COLOR = Color4(0xFFFFF176)
+        private val SWELL_TARGET_RING_COLOR = Color4(0xFFFBC
