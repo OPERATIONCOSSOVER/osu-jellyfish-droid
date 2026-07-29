@@ -66,7 +66,6 @@ import com.osudroid.ui.v2.GameLoaderScene
 import com.osudroid.ui.v2.hud.GameplayHUD
 import ru.nsu.ccfit.zuev.osu.game.GameScene
 import java.util.concurrent.CompletableFuture
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.reflect.KClass
@@ -76,79 +75,14 @@ import kotlin.reflect.KClass
  *
  * Beta scores never enter the osu!droid score/replay database. This keeps existing leaderboard,
  * replay, multiplayer, and performance calculations trustworthy while the ruleset is still evolving.
+ *
+ * The playfield object model lives in `TaikoObjects.kt` and the tuning constants live in
+ * `TaikoGameSceneConstants.kt`.
  */
 class TaikoGameScene private constructor(
     private val beatmapInfo: BeatmapInfo,
     private val mods: ModHashMap
 ) : UIScene() {
-    private enum class ObjectKind {
-        Don,
-        Kat,
-        Drumroll,
-        Denden
-    }
-
-    private data class TaikoObject(
-        val kind: ObjectKind,
-        val startTime: Double,
-        val endTime: Double,
-        val isBig: Boolean,
-        val samples: List<HitSampleInfo>,
-        /** Scroll speed in pixels per millisecond, resolved from the map's timing and SV. */
-        var velocity: Double = 0.0,
-        /** Time in milliseconds this object takes to travel from spawn to the hit target. */
-        var preempt: Double = 1650.0,
-        var judged: Boolean = false,
-        var entity: UIComponent? = null,
-        /**
-         * Denden only: how many alternating hits are needed to clear it, derived from the map's
-         * overall difficulty and the denden's duration.
-         */
-        var requiredHits: Int = 0,
-        /** Denden only: how many alternating hits have been collected so far. */
-        var hitsSoFar: Int = 0,
-        /**
-         * Denden only: the colour of the last counted hit, or null before the first one. osu!taiko
-         * only advances the counter when the colour changes, so this is what enforces alternation.
-         */
-        var lastHitKat: Boolean? = null,
-        /** Drumroll only: the absolute times of each tick, in milliseconds. */
-        var tickTimes: List<Double> = emptyList(),
-        /** Drumroll only: the next tick that can still be collected. */
-        var nextTickIndex: Int = 0,
-        /** Drumroll only: how many ticks were actually collected. */
-        var ticksHit: Int = 0,
-        /** Drumroll only: half the tick spacing, which is the window a tick can be hit within. */
-        var tickWindow: Double = 50.0,
-        /** Denden only: the countdown label drawn in the middle of the swell. */
-        var counterText: UIText? = null,
-        /** Denden only: the thin outline the player is filling towards. */
-        var swellTargetRing: UICircle? = null,
-        /** Denden only: the filled ring that grows outwards as the counter fills. */
-        var swellExpandingRing: UICircle? = null,
-        /** Drumroll only: the elongated body, recoloured as the roll is played. */
-        var rollBody: UIBox? = null,
-        /** Drumroll only: the round head drawn over the start of the body. */
-        var rollHead: UICircle? = null,
-        /**
-         * Drumroll only: a rolling count of collected ticks, clamped to [ROLL_ENGAGED_HITS]. It
-         * rises on a collected tick and falls on a dropped one, and is what drives the body colour.
-         */
-        var rollingHits: Int = 0
-    )
-
-    /**
-     * A note entity that has been judged and is now animating out. Keeping it around briefly
-     * avoids notes popping out of existence the instant they are hit or missed.
-     */
-    private class DecayingEntity(
-        val entity: UIComponent,
-        val duration: Float,
-        var remaining: Float,
-        val velocityX: Float,
-        val velocityY: Float
-    )
-
     private val resources = ResourceManager.getInstance()
     private val global = GlobalManager.getInstance()
     private val songService = global.songService
@@ -1814,60 +1748,17 @@ class TaikoGameScene private constructor(
     }
 
     companion object {
-        private val DON_COLOR = Color4(0xFFEF5350)
-        private val KAT_COLOR = Color4(0xFF42A5F5)
-        private const val SONG_INTRO_DURATION_MS = 2000L
-        private const val INPUT_FLASH_DURATION = 0.12f
-        private const val SKIP_TOUCH_RADIUS = 250f
+        @JvmStatic
+        @JvmOverloads
+        fun start(beatmapInfo: BeatmapInfo, mods: ModHashMap = ModHashMap()) {
+            if (beatmapInfo.beatmapMode != 1) {
+                ToastLogger.showText("This is not a native osu!taiko beatmap.", true)
+                return
+            }
 
-        /** Pixels travelled per beat at slider velocity 1.0, on an 800px reference playfield. */
-        private const val TAIKO_SCROLL_PX_PER_BEAT = 175.0
-        private const val REFERENCE_PLAYFIELD_WIDTH = 800f
-
-        /** Clamps for extreme slider velocities so notes never spawn absurdly early or late. */
-        private const val MIN_PREEMPT = 200.0
-        private const val MAX_PREEMPT = 6000.0
-
-        private const val EXPLOSION_DURATION = 0.12f
-        private const val EXPLOSION_GROWTH = 0.6f
-        private const val EXPLOSION_ALPHA = 0.85f
-
-        private const val JUDGEMENT_DURATION = 0.35f
-        private const val JUDGEMENT_DRIFT = 18f
-
-        /**
-         * Hit notes clear almost instantly, as in osu!stable. The old 0.4s drift left struck notes
-         * lingering over the lane and made dense patterns hard to read.
-         */
-        private const val HIT_DECAY_DURATION = 0.12f
-        private const val HIT_DECAY_VELOCITY_X = -90f
-        private const val HIT_DECAY_VELOCITY_Y = -1150f
-        private const val MISS_DECAY_DURATION = 0.22f
-
-        /** A cleared denden lingers a little longer than a note so the clear reads. */
-        private const val DENDEN_CLEAR_DECAY_DURATION = 0.4f
-
-        /**
-         * Dendens are easier in taiko than spinners are in osu!, so the required hit count carries
-         * this legacy multiplier on top of the difficulty-scaled hits per second.
-         */
-        private const val SWELL_HIT_MULTIPLIER = 1.65
-
-        /**
-         * How far a denden's rings grow beyond its centre circle. osu!lazer uses 5x, which only
-         * fits because its playfield is far taller than this lane; this is the largest ring that
-         * stays inside the lane.
-         */
-        private const val SWELL_RING_MAX_SCALE = 1.9f
-
-        /**
-         * Delay after a denden lands on the hit target before its target ring starts growing, in
-         * milliseconds. Matches osu!lazer's ring_appear_offset.
-         */
-        private const val SWELL_RING_APPEAR_OFFSET = 100.0
-
-        /** How long a denden's target ring takes to reach full size, in milliseconds. */
-        private const val SWELL_RING_GROW_DURATION = 400.0
-
-        private val SWELL_RING_COLOR = Color4(0xFFFFF176)
-        private val SWELL_TARGET_RING_COLOR = Color4(0xFFFBC
+            TaikoGameScene(beatmapInfo, mods).also {
+                it.beginLoadingWithLoader()
+            }
+        }
+    }
+}
