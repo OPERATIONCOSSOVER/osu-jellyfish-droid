@@ -16,6 +16,10 @@ sealed class HitObjectTest {
         stackOffsetMultiplier = when (mode) {
             GameMode.Droid -> 4f
             GameMode.Standard -> -6.4f
+
+            // Matches HitObject.applyDefaults: taiko notes travel along a scrolling track rather
+            // than being placed on the playfield, so they are never stacked against each other.
+            GameMode.Taiko -> 0f
         }
 
         fun testOffset() {
