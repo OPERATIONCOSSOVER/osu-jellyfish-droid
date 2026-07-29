@@ -107,7 +107,7 @@ public class GameHelper {
             (float) Constants.MAP_HEIGHT / Constants.MAP_ACTUAL_HEIGHT
         );
 
-        // Additional consideration for Catmull sliders that form "bulbs" around points with identical positions.
+        // Additional consideration for Catmull sliders that form bulbs around points with identical positions.
         boolean isCatmull = sliderPath.pathType == SliderPathType.Catmull;
         int catmullSegmentLength = PathApproximation.CATMULL_DETAIL * 2;
 
@@ -402,6 +402,27 @@ public class GameHelper {
         var mods = gameScene.stat.getMod();
 
         return mods == null ? null : mods.ofType(ModWiggle.class);
+    }
+
+    /**
+     * Gets the active {@link ModAdaptiveSpeed}, if any.
+     * <p>
+     * Resolved from the running {@link GameScene} for the same reason as
+     * {@link #getObjectScaleTween(GameObjectListener)}: a stale static field would silently keep
+     * feeding judgements into a mod that had been switched off, which would drag the track rate
+     * around on a later play.
+     *
+     * @param listener The gameplay listener the object was initialized with.
+     * @return The active {@link ModAdaptiveSpeed}, or {@code null} if it is not enabled.
+     */
+    public static ModAdaptiveSpeed getAdaptiveSpeed(final GameObjectListener listener) {
+        if (!(listener instanceof GameScene gameScene) || gameScene.stat == null) {
+            return null;
+        }
+
+        var mods = gameScene.stat.getMod();
+
+        return mods == null ? null : mods.ofType(ModAdaptiveSpeed.class);
     }
 
     public static ModScoreV2 getScoreV2() {
