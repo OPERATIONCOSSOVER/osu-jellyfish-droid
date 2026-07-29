@@ -213,7 +213,7 @@ data class BeatmapInfo(
     var epilepsyWarning: Boolean,
 
     /**
-     * The native osu! ruleset ID declared by the beatmap (`0` = osu!, `1` = osu!taiko, `2` = osu!catch).
+     * The native osu! ruleset ID declared by the beatmap (`0` = osu!, `1` = osu!taiko).
      */
     @ColumnInfo(defaultValue = "0")
     var beatmapMode: Int = 0,
@@ -279,20 +279,12 @@ data class BeatmapInfo(
         get() = beatmapMode == 1
 
     /**
-     * Whether this beatmap is a native osu!catch beatmap.
-     */
-    val isCatch
-        get() = beatmapMode == 2
-
-    /**
      * Whether the beatmap needs a difficulty calculation.
      */
     val needsDifficultyCalculation
         get() = when {
             isTaiko -> taikoStarRating == null
-            // osu!catch beatmaps are authored from osu!standard hit objects, so the droid and standard
-            // algorithms still describe them closely enough to sort and display in song select.
-            beatmapMode == 0 || isCatch -> droidStarRating == null || standardStarRating == null
+            beatmapMode == 0 -> droidStarRating == null || standardStarRating == null
             // Rulesets that the game cannot describe at all are never calculated.
             else -> false
         }
