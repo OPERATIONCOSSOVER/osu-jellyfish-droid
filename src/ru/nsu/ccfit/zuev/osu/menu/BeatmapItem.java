@@ -198,7 +198,7 @@ public class BeatmapItem extends Sprite {
             setSelectedColor();
             moved = true;
             if (item != null) {
-                item.get().showPropertiesMenu();
+                item.get().showPropertiesMenu(this);
             }
             downTime = -1;
         }

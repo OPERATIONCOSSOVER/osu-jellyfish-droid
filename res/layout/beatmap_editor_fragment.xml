@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/frg_background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F20A0A11"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FF161622"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="8dp">
+
+        <Button
+            android:id="@+id/editorClose"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/editor_close" />
+
+        <TextView
+            android:id="@+id/editorTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:paddingHorizontal="12dp"
+            android:textColor="#FFFFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/editorUndo"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/editor_undo" />
+
+        <Button
+            android:id="@+id/editorRedo"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/editor_redo" />
+
+        <Button
+            android:id="@+id/editorSetup"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/editor_setup" />
+
+        <Button
+            android:id="@+id/editorSave"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/editor_save" />
+
+        <Button
+            android:id="@+id/editorTest"
+            style="@style/button_borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/editor_test" />
+    </LinearLayout>
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FF202033"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp">
+
+            <Button
+                android:id="@+id/editorToolSelect"
+                style="@style/button_borderless"
+                android:minHeight="42dp"
+                android:text="@string/editor_tool_select" />
+
+            <Button
+                android:id="@+id/editorToolCircle"
+                style="@style/button_borderless"
+                android:minHeight="42dp"
+                android:text="@string/editor_tool_circle" />
+
+            <Button
+                android:id="@+id/editorToolSlider"
+                style="@style/button_borderless"
+                android:minHeight="42dp"
+                android:text="@string/editor_tool_slider" />
+
+            <Button
+                android:id="@+id/editorToolSpinner"
+                style="@style/button_borderless"
+                android:minHeight="42dp"
+                android:text="@string/editor_tool_spinner" />
+
+            <Button
+                android:id="@+id/editorToolDelete"
+                style="@style/button_borderless"
+                android:minHeight="42dp"
+                android:text="@string/editor_tool_delete" />
+
+            <CheckBox
+                android:id="@+id/editorNewCombo"
+                style="@style/button_borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:button="@null"
+                android:minHeight="42dp"
+                android:text="@string/editor_new_combo" />
+
+            <TextView
+                android:id="@+id/editorSelection"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="12dp"
+                android:text="@string/editor_nothing_selected"
+                android:textColor="#FFB2B2CC"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <com.osudroid.beatmaps.editor.BeatmapComposeView
+        android:id="@+id/editorPlayfield"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FF161622"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="8dp">
+
+        <Button
+            android:id="@+id/editorPlayPause"
+            style="@style/button"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:text="@string/editor_play" />
+
+        <Button
+            android:id="@+id/editorPreviousSnap"
+            style="@style/button"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginLeft="6dp"
+            android:text="−" />
+
+        <SeekBar
+            android:id="@+id/editorTimeline"
+            android:layout_width="0dp"
+            android:layout_height="44dp"
+            android:layout_marginHorizontal="8dp"
+            android:layout_weight="1"
+            android:max="1" />
+
+        <Button
+            android:id="@+id/editorNextSnap"
+            style="@style/button"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:text="+" />
+
+        <TextView
+            android:id="@+id/editorTime"
+            android:layout_width="90dp"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="00:00.000"
+            android:textColor="#FFFFFFFF"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/editorObjectEarlier"
+            style="@style/button"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:text="@string/editor_object_earlier" />
+
+        <Button
+            android:id="@+id/editorObjectLater"
+            style="@style/button"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginLeft="6dp"
+            android:text="@string/editor_object_later" />
+
+        <TextView
+            android:id="@+id/editorSnap"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingLeft="10dp"
+            android:text="@string/editor_snap_quarter"
+            android:textColor="#FFB2B2CC"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/editorStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FF202033"
+        android:gravity="center"
+        android:padding="4dp"
+        android:text="@string/editor_loading"
+        android:textColor="#FFB2B2CC"
+        android:textSize="11sp" />
+</LinearLayout>

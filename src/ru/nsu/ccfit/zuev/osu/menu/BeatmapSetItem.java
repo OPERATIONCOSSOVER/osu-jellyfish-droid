@@ -33,6 +33,7 @@ public class BeatmapSetItem {
     boolean selected = false;
     WeakReference<MenuItemListener> listener;
     private BeatmapItem selectedBeatmapItem = null;
+    private BeatmapInfo propertiesBeatmapInfo = null;
     private boolean visible = true;
     private boolean favorite;
     private boolean deleted = false;
@@ -450,7 +451,19 @@ public class BeatmapSetItem {
     }
 
     public void showPropertiesMenu() {
+        propertiesBeatmapInfo = selectedBeatmapItem != null
+            ? selectedBeatmapItem.getBeatmapInfo()
+            : getFirstBeatmap();
         listener.get().showPropertiesMenu(this);
+    }
+
+    public void showPropertiesMenu(BeatmapItem source) {
+        propertiesBeatmapInfo = source != null ? source.getBeatmapInfo() : getFirstBeatmap();
+        listener.get().showPropertiesMenu(this);
+    }
+
+    public BeatmapInfo getPropertiesBeatmapInfo() {
+        return propertiesBeatmapInfo != null ? propertiesBeatmapInfo : getFirstBeatmap();
     }
 
     public void update(final float dt) {

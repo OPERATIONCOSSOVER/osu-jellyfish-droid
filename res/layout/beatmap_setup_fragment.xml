@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/frg_background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#B0000000">
+
+    <LinearLayout
+        android:id="@+id/fullLayout"
+        android:layout_width="620dp"
+        android:layout_height="match_parent"
+        android:layout_centerInParent="true"
+        android:layout_marginVertical="20dp"
+        android:background="@drawable/rounded_rect"
+        android:backgroundTint="#FF1E1E2E"
+        android:orientation="vertical">
+
+        <TextView
+            style="@style/settings_tab_divider"
+            android:padding="12dp"
+            android:text="@string/editor_setup_title"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingHorizontal="18dp"
+                android:paddingBottom="16dp">
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_title_romanized" />
+                <EditText android:id="@+id/editorMetadataTitle" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_title_unicode" />
+                <EditText android:id="@+id/editorMetadataTitleUnicode" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_artist_romanized" />
+                <EditText android:id="@+id/editorMetadataArtist" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_artist_unicode" />
+                <EditText android:id="@+id/editorMetadataArtistUnicode" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_creator" />
+                <EditText android:id="@+id/editorMetadataCreator" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_difficulty_name" />
+                <EditText android:id="@+id/editorMetadataVersion" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_source" />
+                <EditText android:id="@+id/editorMetadataSource" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+                <TextView style="@style/settings_tab_divider" android:gravity="start" android:text="@string/editor_tags" />
+                <EditText android:id="@+id/editorMetadataTags" style="@style/editText" android:layout_width="match_parent" android:layout_height="wrap_content" />
+            </LinearLayout>
+        </ScrollView>
+
+        <TextView
+            android:id="@+id/editorSetupError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="18dp"
+            android:paddingVertical="4dp"
+            android:textColor="#FFFFA8A8"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:orientation="horizontal"
+            android:padding="10dp">
+
+            <Button
+                android:id="@+id/editorSetupCancel"
+                style="@style/button"
+                android:text="@string/editor_cancel" />
+
+            <Button
+                android:id="@+id/editorSetupApply"
+                style="@style/button"
+                android:layout_marginLeft="8dp"
+                android:text="@string/editor_apply" />
+        </LinearLayout>
+    </LinearLayout>
+</RelativeLayout>

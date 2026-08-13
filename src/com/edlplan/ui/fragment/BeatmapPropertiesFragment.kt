@@ -11,6 +11,7 @@ import com.edlplan.ui.BaseAnimationListener
 import com.edlplan.ui.EasingHelper
 import com.osudroid.data.BeatmapOptions
 import com.osudroid.data.DatabaseManager
+import com.osudroid.beatmaps.editor.BeatmapEditorFragment
 import com.reco1l.framework.android.cornerRadius
 import com.reco1l.framework.android.dp
 import com.reco1l.osu.ui.MessageDialog
@@ -105,6 +106,13 @@ class BeatmapPropertiesFragment : BaseFragment(), IPropsMenu {
             val dialog = CollectionsManagerFragment()
 
             dialog.showToAddToFolder(selectedBeatmap.setDirectory)
+        }
+
+        findViewById<View>(R.id.editBeatmap)!!.setOnClickListener {
+            val songMenu = menu ?: return@setOnClickListener
+            val selectedItem = item ?: return@setOnClickListener
+            BeatmapEditorFragment().show(songMenu, selectedItem.propertiesBeatmapInfo)
+            dismiss()
         }
 
         findViewById<View>(R.id.deleteBeatmap)!!.setOnClickListener {
