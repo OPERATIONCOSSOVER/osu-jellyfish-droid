@@ -1902,6 +1902,8 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
 
                 if (GameHelper.isAutoplay() || GameHelper.isAutopilot()) {
                     gameplaySpinner.setAutoPlay();
+                } else if (lastMods.contains(ModSpunOut.class)) {
+                    gameplaySpinner.setSpunOut();
                 }
 
                 gameplaySpinner.setId(++lastObjectId);

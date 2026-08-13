@@ -205,7 +205,7 @@ public class GameplayModernSpinner extends GameplaySpinner {
                 dFill = 0;
 
             if (autoPlay) {
-                dFill = 5 * 4 * dt;
+                dFill = automatedRotationsPerSecond * 4 * dt;
                 degree = (rotations + dFill / 4f) * 360;
                 top.setRotation(degree);
                 //auto时，FL光圈绕中心旋转

@@ -10,6 +10,7 @@ import com.osudroid.beatmaps.hitobjects.BankHitSampleInfo;
 import com.osudroid.beatmaps.hitobjects.Spinner;
 import com.osudroid.game.GameplayHitSampleInfo;
 import com.osudroid.game.GameplaySequenceHitSampleInfo;
+import com.osudroid.mods.ModSpunOut;
 
 import org.anddev.andengine.opengl.texture.region.TextureRegion;
 import org.anddev.andengine.util.MathUtils;
@@ -49,6 +50,7 @@ public class GameplaySpinner extends GameObject {
     protected StatisticV2 stat;
     protected float passedTime;
     protected float duration;
+    protected float automatedRotationsPerSecond;
 
     protected final boolean isSpinnerFrequencyModulate;
     protected final ArrayList<GameplayHitSampleInfo> hitSamples = new ArrayList<>(5);
@@ -110,6 +112,8 @@ public class GameplaySpinner extends GameObject {
 
     public void init(final GameObjectListener listener, final UIScene scene,
                      final Spinner beatmapSpinner, final float rps, final StatisticV2 stat) {
+        autoPlay = false;
+        automatedRotationsPerSecond = 0;
         fullRotations = 0;
         rotations = 0;
         this.scene = scene;
@@ -184,6 +188,23 @@ public class GameplaySpinner extends GameObject {
         oldMouse = null;
 
         setLifetimeEnd(Float.MAX_VALUE);
+    }
+
+    @Override
+    public void setAutoPlay() {
+        super.setAutoPlay();
+        automatedRotationsPerSecond = 5f;
+    }
+
+    /**
+     * Enables osu!stable's Spun Out behavior for this spinner.
+     *
+     * Player input stays disabled through the existing automatic spin path, but unlike Autoplay and Autopilot this
+     * mode never updates the automatic gameplay cursor.
+     */
+    public void setSpunOut() {
+        super.setAutoPlay();
+        automatedRotationsPerSecond = ModSpunOut.ROTATIONS_PER_SECOND;
     }
 
     protected void detachFromScene() {
@@ -333,7 +354,7 @@ public class GameplaySpinner extends GameObject {
                 dfill = 0;
 
             if (autoPlay) {
-                dfill = 5 * 4 * dt;
+                dfill = automatedRotationsPerSecond * 4 * dt;
                 circle.setRotation((rotations + dfill / 4f) * 360);
                 //auto时，FL光圈绕中心旋转
                 if (GameHelper.isAutoplay() || GameHelper.isAutopilot()) {
@@ -436,7 +457,7 @@ public class GameplaySpinner extends GameObject {
     }
 
     protected void applySeekRotations() {
-        float totalRotations = 5f * passedTime;
+        float totalRotations = automatedRotationsPerSecond * passedTime;
         int wholeRotations = (int) totalRotations;
 
         if (clear) {
