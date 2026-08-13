@@ -12,6 +12,15 @@ class ScoreMultiplierCalculatorTest {
     }
 
     @Test
+    fun `Spun Out uses the stable score multiplier`() {
+        Assert.assertEquals(
+            0.9,
+            ScoreMultiplierCalculator().calculateFor(listOf(ModSpunOut())),
+            1e-6
+        )
+    }
+
+    @Test
     fun `Flat multiplier`() {
         Assert.assertEquals(0.15, calculateMultiplier(listOf(ModEasy())), 1e-6)
     }

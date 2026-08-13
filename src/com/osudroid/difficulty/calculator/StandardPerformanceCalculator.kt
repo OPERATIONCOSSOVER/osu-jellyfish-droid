@@ -16,6 +16,7 @@ import com.osudroid.mods.ModFlashlight
 import com.osudroid.mods.ModNoFail
 import com.osudroid.mods.ModRelax
 import com.osudroid.mods.ModScoreV2
+import com.osudroid.mods.ModSpunOut
 import com.osudroid.mods.ModTraceable
 import kotlin.math.exp
 import kotlin.math.ln
@@ -65,6 +66,10 @@ class StandardPerformanceCalculator(
 
         if (this.attributes.mods.any { m -> m is ModNoFail }) {
             multiplier *= max(0.9, 1 - 0.02 * effectiveMissCount)
+        }
+
+        if (this.attributes.mods.any { m -> m is ModSpunOut } && totalHits > 0) {
+            multiplier *= 1 - (this.attributes.spinnerCount.toDouble() / totalHits).pow(0.85)
         }
 
         if (this.attributes.mods.any { m -> m is ModRelax }) {

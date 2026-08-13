@@ -44,6 +44,7 @@ class LegacyScoreMultiplierCalculator @JvmOverloads constructor(difficulty: Beat
 
         single<ModRelax>(1e-3f)
         single<ModAutopilot>(1e-3f)
+        single<ModSpunOut>(0.9f)
 
         // endregion
 

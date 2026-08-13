@@ -48,6 +48,7 @@ object ModUtils {
             ModReplayV6(),
             ModScoreV2(),
             ModSmallCircle(),
+            ModSpunOut(),
             ModSuddenDeath(),
             ModSynesthesia(),
             ModTraceable(),
