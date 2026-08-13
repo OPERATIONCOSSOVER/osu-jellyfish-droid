@@ -54,8 +54,6 @@ object ThemeSongManager {
      */
     private const val SOURCE_MARKER_NAME = ".source"
 
-    private val AUDIO_EXTENSIONS = arrayOf(".mp3", ".ogg", ".wav", ".m4a", ".aac", ".flac")
-
     /** Cap on how many names a diagnostic listing prints, so a huge .osz cannot flood the log. */
     private const val MAX_LISTED_FILES = 40
 
@@ -178,6 +176,16 @@ object ThemeSongManager {
     @JvmStatic
     fun setCustomOsz(file: File) {
         Config.setString(CUSTOM_PREFERENCE_KEY, file.absolutePath)
+
+        // The imported copy always has the same path. File size and modification timestamps are
+        // not unique enough to detect every replacement on Android storage, so explicitly discard
+        // the old extraction whenever the player chooses another archive.
+        try {
+            customDir().deleteRecursively()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to invalidate the previous custom theme", e)
+        }
+
         invalidate()
     }
 
@@ -238,6 +246,23 @@ object ThemeSongManager {
         return resolved
     }
 
+    /**
+     * Extracts only the selected custom archive, without falling back to the bundled theme.
+     *
+     * The settings importer uses this to distinguish a valid custom intro from a failed import.
+     * Using [ensureExtracted] there used to turn failures into false successes because its bundled
+     * fallback still returned a non-null audio path.
+     */
+    @JvmStatic
+    fun ensureCustomExtracted(): String? {
+        val custom = getCustomOszPath() ?: return null
+        val resolved = extractCustom(custom)
+
+        audioPath = resolved
+        resolveAttempted = true
+        return resolved
+    }
+
     private fun themeDir() = File(Config.getCorePath(), FOLDER_NAME)
 
     private fun customDir() = File(Config.getCorePath(), CUSTOM_FOLDER_NAME)
@@ -294,7 +319,7 @@ object ThemeSongManager {
         }
 
         if (marker.isFile && runCatching { marker.readText() }.getOrNull() == stamp) {
-            findAudioFile(target, true)?.let { return it }
+            ThemeSongArchive.findCustomAudioFile(target)?.let { return it.absolutePath }
         }
 
         try {
@@ -307,7 +332,7 @@ object ThemeSongManager {
                 return failCustom(osz.name + " could not be opened as a .osz archive", e)
             }
 
-            val resolved = findAudioFile(target, true)
+            val resolved = ThemeSongArchive.findCustomAudioFile(target)?.absolutePath
 
             if (resolved == null) {
                 val contents = listAllFiles(target)
@@ -319,7 +344,8 @@ object ThemeSongManager {
                 } else {
                     failCustom(
                         "nothing in " + osz.name + " has a supported audio extension " +
-                            AUDIO_EXTENSIONS.joinToString() + "; it holds " + contents.joinToString()
+                            ThemeSongArchive.supportedAudioExtensions.joinToString() +
+                            "; it holds " + contents.joinToString()
                     )
                 }
             }
@@ -340,7 +366,7 @@ object ThemeSongManager {
         val target = themeDir().apply { mkdirs() }
 
         // Already extracted by a previous run.
-        findAudioFile(target, false)?.let { return it }
+        ThemeSongArchive.findBundledAudioFile(target)?.let { return it.absolutePath }
 
         try {
             val activity = GlobalManager.getInstance().mainActivity
@@ -353,51 +379,13 @@ object ThemeSongManager {
             ZipFile(tempOsz).extractAll(target.absolutePath)
             tempOsz.delete()
 
-            val resolved = findAudioFile(target, false)
+            val resolved = ThemeSongArchive.findBundledAudioFile(target)?.absolutePath
             Log.i(TAG, "Theme extracted to " + target.absolutePath + ", audio: " + resolved)
             return resolved
         } catch (e: Exception) {
             Log.e(TAG, "Failed to extract theme .osz from assets", e)
             return null
         }
-    }
-
-    /**
-     * Finds the first playable file inside [folder].
-     *
-     * The bundled theme searches the top level only, so it never reaches down into the Custom
-     * subfolder and picks up the player's own audio. A picked .osz is searched recursively,
-     * because plenty of them wrap their contents in a folder rather than sitting flat at the root;
-     * scanning only the top level used to resolve to nothing and silently fall back to the bundled
-     * theme.
-     */
-    private fun findAudioFile(folder: File, recursive: Boolean): String? {
-        if (!folder.isDirectory) return null
-
-        val children = folder.listFiles() ?: return null
-
-        children.firstOrNull { file ->
-            file.isFile && AUDIO_EXTENSIONS.any { file.name.endsWith(it, true) }
-        }?.let { return it.absolutePath }
-
-        if (!recursive) return null
-
-        for (child in children) {
-            if (child.isDirectory) {
-                findAudioFile(child, true)?.let { return it }
-            }
-        }
-
-        return null
-    }
-
-    /**
-     * The .osu describing the theme, which lives alongside the audio inside the .osz.
-     */
-    private fun findOsuFile(folder: File): File? {
-        if (!folder.isDirectory) return null
-
-        return folder.listFiles()?.firstOrNull { it.isFile && it.name.endsWith(".osu", true) }
     }
 
     /**
@@ -442,14 +430,27 @@ object ThemeSongManager {
         introLoaded = true
 
         val audio = ensureExtracted() ?: return
-        val folder = File(audio).parentFile ?: return
-        val osu = findOsuFile(folder) ?: return
+        val audioFile = File(audio)
+        val customRoot = customDir()
+        val root = if (isInside(audioFile, customRoot)) {
+            customRoot
+        } else {
+            audioFile.parentFile ?: return
+        }
+        val osu = ThemeSongArchive.findOsuFileForAudio(root, audioFile) ?: return
 
         try {
             parseOsu(osu)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to read the intro .osu", e)
         }
+    }
+
+    private fun isInside(file: File, folder: File): Boolean {
+        val filePath = runCatching { file.canonicalPath }.getOrElse { file.absolutePath }
+        val folderPath = runCatching { folder.canonicalPath }.getOrElse { folder.absolutePath }
+
+        return filePath == folderPath || filePath.startsWith(folderPath + File.separator)
     }
 
     /**
@@ -561,19 +562,6 @@ object ThemeSongManager {
         songService.preLoad(path)
         songService.play()
         songService.setVolume(Config.getBgmVolume())
-    }
-
-    /**
-     * Reports that a newly picked or cleared theme will be heard on the next launch.
-     *
-     * The theme is deliberately not swapped underneath the running menu: the intro is tied to
-     * opening the game, and its metadata and timing points are read once while the menu is being
-     * built, so hot-swapping would leave "now playing" and the cookie beating out of step with the
-     * audio.
-     */
-    @JvmStatic
-    fun restart() {
-        ToastLogger.showText("Restart the game to apply the new intro theme.", true)
     }
 
     @JvmStatic

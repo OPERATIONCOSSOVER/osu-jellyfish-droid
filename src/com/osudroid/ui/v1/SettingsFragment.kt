@@ -1,6 +1,7 @@
 package com.osudroid.ui.v1
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -175,7 +176,7 @@ class SettingsFragment : SettingsFragment() {
 
                 // Extract now rather than on the next menu return, so a .osz holding no audio is
                 // reported while the player is still looking at the setting.
-                val extracted = ThemeSongManager.ensureExtracted()
+                val extracted = ThemeSongManager.ensureCustomExtracted()
 
                 mainThread {
                     loading.dismiss()
@@ -185,10 +186,8 @@ class SettingsFragment : SettingsFragment() {
 
                         Snackbar.make(decorView, "That .osz does not contain an audio track.", 3000).show()
                     } else {
-                        ThemeSongManager.restart()
                         updateThemeSongSummary()
-
-                        Snackbar.make(decorView, "Intro theme updated.", 2000).show()
+                        showThemeRestartPrompt()
                     }
                 }
             } catch (e: Exception) {
@@ -450,6 +449,26 @@ class SettingsFragment : SettingsFragment() {
         preference.summary = ThemeSongManager.getCustomOszName() ?: "Using the bundled theme"
     }
 
+    /**
+     * The running menu has already loaded its intro metadata and timing, so applying a replacement
+     * safely requires a fresh process. Give the player an explicit choice instead of relying on a
+     * transient toast that can be missed.
+     */
+    private fun showThemeRestartPrompt() {
+        AlertDialog.Builder(requireActivity())
+            .setTitle("Restart required")
+            .setMessage("The intro theme was imported successfully. Restart osu!jellyfish now to apply it?")
+            .setNegativeButton("Later", null)
+            .setPositiveButton("Restart now") { _, _ ->
+                val activity = requireActivity()
+                val intent = Intent(activity, MainActivity::class.java)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                activity.startActivity(intent)
+                Runtime.getRuntime().exit(0)
+            }
+            .show()
+    }
+
 
     private fun handleGraphicsSectionPreferences() {
 
@@ -464,10 +483,8 @@ class SettingsFragment : SettingsFragment() {
 
         findPreference<Preference>("themeSongCustomClear")!!.setOnPreferenceClickListener {
             ThemeSongManager.clearCustomOsz()
-            ThemeSongManager.restart()
             updateThemeSongSummary()
-
-            ToastLogger.showText("Intro theme reset to the bundled one.", true)
+            showThemeRestartPrompt()
             true
         }
 
