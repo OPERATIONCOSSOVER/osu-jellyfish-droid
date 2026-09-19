@@ -800,6 +800,10 @@ public class Config {
         return getBoolean("displayPlayfieldBorder", false);
     }
 
+    public static boolean isSliderBorderFollowComboColor() {
+        return getBoolean("sliderBorderFollowComboColor", false);
+    }
+
     public static int getBackButtonPressTime() {
         return backButtonPressTime;
     }

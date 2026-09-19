@@ -141,8 +141,14 @@
             hexValue="true"
             android:defaultValue="@integer/COLOR_YELLOW"
             android:key="combo4"
-            android:title="Combo 4"
-            app:layout="@layout/settings_preference_bottom"/>
+            android:title="Combo 4" />
+
+        <CheckBoxPreference
+            android:defaultValue="false"
+            android:key="sliderBorderFollowComboColor"
+            android:summary="@string/opt_slider_border_follow_combo_color_summary"
+            android:title="@string/opt_slider_border_follow_combo_color_title"
+            app:layout="@layout/settings_preference_checkbox_bottom" />
 
     </PreferenceCategory>
 
