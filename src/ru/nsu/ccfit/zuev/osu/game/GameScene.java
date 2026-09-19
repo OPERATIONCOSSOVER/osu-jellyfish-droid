@@ -1916,7 +1916,8 @@ public class GameScene implements GameObjectListener, IOnSceneTouchListener {
                 final var gameplaySlider = GameObjectPool.getInstance().getSlider();
 
                 gameplaySlider.init(this, mgScene, stat, parsedSlider, playableBeatmap.getControlPoints(),
-                        comboColor, sliderBorderColor, getSliderPath(sliderIndex), getSliderRenderPath(sliderIndex));
+                        comboColor, Config.isSliderBorderFollowComboColor() ? comboColor : sliderBorderColor,
+                        getSliderPath(sliderIndex), getSliderRenderPath(sliderIndex));
 
                 ++sliderIndex;
                 addObject(gameplaySlider);
