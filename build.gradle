@@ -42,6 +42,45 @@ def __diagTee = new PrintStream(new OutputStream() {
 System.setOut(__diagTee)
 System.setErr(__diagTee)
 
+// Gradle does not log through System.out, so subscribe to Gradle's internal output event bus as
+// well. Wrapped in try/catch: if the internal API is unavailable the build must still run.
+try {
+    def __diagMgrClass = Class.forName('org.gradle.internal.logging.events.output.OutputEventListenerManager')
+    def __diagListenerClass = Class.forName('org.gradle.internal.logging.events.output.OutputEventListener')
+    def __diagManager = gradle.services.get(__diagMgrClass)
+    def __diagHandler = { proxy, method, args ->
+        if (method.getName() == 'onOutput' && args != null && args.length == 1 && args[0] != null) {
+            def __ev = args[0]
+            def __text = null
+            try {
+                def __name = __ev.getClass().getSimpleName()
+                if (__name == 'StyledTextOutputEvent') {
+                    __text = __ev.spans?.collect { span -> span.text }?.join('')
+                } else if (__name == 'LogEvent') {
+                    __text = __ev.message
+                }
+            } catch (Throwable ignored) { __text = null }
+            if (__text == null) {
+                try { __text = __ev.toString() } catch (Throwable ignored2) { __text = null }
+            }
+            if (__text != null) {
+                synchronized (__diagBuf) {
+                    if (__diagBuf.length() < 600000) { __diagBuf.append(__text).append('\n') }
+                }
+            }
+        }
+        return null
+    } as java.lang.reflect.InvocationHandler
+    def __diagListener = java.lang.reflect.Proxy.newProxyInstance(
+            __diagMgrClass.getClassLoader(),
+            [__diagListenerClass] as Class[],
+            __diagHandler)
+    __diagManager.addListener(__diagListener)
+    System.out.println('::warning::DIAG_LISTENER_ATTACHED')
+} catch (Throwable __diagError) {
+    System.out.println('::warning::DIAG_LISTENER_UNAVAILABLE ' + __diagError.getClass().getName())
+}
+
 gradle.taskGraph.afterTask { task, state ->
     if (state.failure != null) {
         def sb = new StringBuilder()
@@ -60,13 +99,16 @@ gradle.buildFinished { result ->
     System.setOut(__diagOrigOut)
     System.setErr(__diagOrigErr)
     if (result.failure == null) { return }
-    def lines = __diagBuf.toString().readLines()
+    def lines = __diagBuf.toString().readLines().findAll { it.trim().length() > 0 }
     def errs = lines.findAll {
         it.startsWith('e: ') || it.startsWith('FAILED_TASK=') || it.startsWith('CAUSE[') ||
-                it.contains(': error: ') || it.contains(' error: ')
+                it.contains(': error: ') || it.contains(' error: ') || it.contains('error:')
     }.unique()
+    // Fallback: if nothing matched the known compiler prefixes, fall back to the tail of the
+    // captured output so there is always something to read.
+    if (errs.isEmpty()) { errs = lines.takeRight(40) }
     __diagOrigOut.println("::error::DIAG_ERROR_LINE_COUNT=" + errs.size())
-    errs.take(45).each { line ->
+    errs.take(60).each { line ->
         def msg = line.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
         if (msg.length() > 380) { msg = msg.substring(0, 380) }
         __diagOrigOut.println("::error::" + msg)
