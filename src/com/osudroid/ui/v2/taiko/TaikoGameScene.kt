@@ -2,6 +2,7 @@ package com.osudroid.ui.v2.taiko
 
 import android.util.Log
 import com.osudroid.GameMode
+import com.osudroid.beatmaps.TaikoHitWindow
 import com.osudroid.beatmaps.constants.SampleBank
 import com.osudroid.beatmaps.hitobjects.BankHitSampleInfo
 import com.osudroid.beatmaps.hitobjects.HitCircle
@@ -14,11 +15,11 @@ import com.osudroid.beatmaps.sections.BeatmapControlPoints
 import com.osudroid.beatmaps.sections.BeatmapDifficulty
 import com.osudroid.data.BeatmapInfo
 import com.osudroid.mods.ModAutoplay
+import com.osudroid.scoring.ScoreMultiplierCalculator
 import com.osudroid.ui.v2.hud.HUDElement
 import com.osudroid.ui.v2.hud.HUDElementSkinData
 import com.osudroid.ui.v2.hud.HUDSkinData
 import com.osudroid.ui.v2.hud.elements.HUDAccuracyCounter
-import com.osudroid.ui.v2.hud.elements.HUDComboCounter
 import com.osudroid.ui.v2.hud.elements.HUDHealthBar
 import com.osudroid.ui.v2.hud.elements.HUDLinearSongProgress
 import com.osudroid.ui.v2.hud.elements.HUDPieSongProgress
@@ -42,6 +43,7 @@ import com.reco1l.andengine.shape.UICircle
 import com.reco1l.andengine.sprite
 import com.reco1l.andengine.sprite.ScaleType
 import com.reco1l.andengine.sprite.UIAnimatedSprite
+import com.reco1l.andengine.sprite.UISprite
 import com.reco1l.andengine.text
 import com.reco1l.andengine.text.UIText
 import com.reco1l.andengine.ui.UIMessageDialog
@@ -67,6 +69,7 @@ import com.osudroid.ui.v2.hud.GameplayHUD
 import ru.nsu.ccfit.zuev.osu.game.GameScene
 import java.util.concurrent.CompletableFuture
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.reflect.KClass
 
@@ -76,8 +79,16 @@ import kotlin.reflect.KClass
  * Beta scores never enter the osu!droid score/replay database. This keeps existing leaderboard,
  * replay, multiplayer, and performance calculations trustworthy while the ruleset is still evolving.
  *
- * The playfield object model lives in `TaikoObjects.kt` and the tuning constants live in
- * `TaikoGameSceneConstants.kt`.
+ * The playfield object model lives in `TaikoObjects.kt`, skin resolution in `TaikoSkin.kt` and the
+ * tuning constants in `TaikoGameSceneConstants.kt`.
+ *
+ *Behaviour follows the osu!stable client where it can be verified:
+ *
+ * - Hit windows come from [TaikoHitWindow], which bends at OD 5 the way stable does.
+ * - Scoring is stable's ScoreV1 for osu!taiko.
+ * - Health never drains, starts empty and must reach 50% to pass.
+ * - Colour matters: a wrong-colour tap on a note is a miss, and a big note only pays double when
+ *   both colours land together.
  */
 class TaikoGameScene private constructor(
     private val beatmapInfo: BeatmapInfo,
@@ -91,30 +102,49 @@ class TaikoGameScene private constructor(
 
     private val screenWidth = Config.getRES_WIDTH().toFloat()
     private val screenHeight = Config.getRES_HEIGHT().toFloat()
-    private val laneTop = screenHeight * 0.29f
-    private val laneHeight = screenHeight * 0.25f
+
+    /**
+     * osu!stable puts the taiko field in the upper part of the screen and leaves the lower part to
+     * the beatmap background. This scene keeps the full-screen background, but proportions the lane
+     * the way stable does: a band a little under a quarter of the screen tall sitting just above
+     * the middle, with the drum hugging the left edge.
+     */
+    private val laneTop = screenHeight * 0.34f
+    private val laneHeight = screenHeight * 0.22f
     private val laneBottom = laneTop + laneHeight
     private val laneY = laneTop + laneHeight / 2f
-    private val leftPanelWidth = screenWidth * 0.14f
-    private val targetX = screenWidth * 0.21f
+
+    /**
+     * Stable's drum is noticeably larger than the lane it sits on, and notes are struck just past
+     * its right edge rather than on the drum itself.
+     */
+    private val drumDiameter = (laneHeight * 1.55f).coerceAtMost(screenHeight * 0.42f)
+    private val drumCenterX = screenWidth * 0.015f + drumDiameter / 2f
+
+    /** Where notes have to be when they are hit. */
+    private val targetX = drumCenterX + drumDiameter / 2f + laneHeight * 0.22f
+
     private val spawnX = screenWidth + 80f
-    private val normalNoteDiameter = laneHeight * 0.52f
-    private val bigNoteDiameter = laneHeight * 0.78f
-    private val targetDiameter = laneHeight * 0.76f
-    private val judgementBaseY = laneBottom + 10f
+    private val normalNoteDiameter = laneHeight * 0.62f
+    private val bigNoteDiameter = laneHeight * 0.92f
+    private val targetDiameter = laneHeight * 0.86f
+    private val judgementBaseY = laneBottom + 8f
+
+    /** Diameter of the burst drawn on the hit position. */
+    private val burstDiameter = laneHeight * 1.05f
 
     /**
      * Size of a denden's centre circle. osu!lazer draws a swell as an ordinary taiko object that
      * travels down the lane and parks on the hit target, so it is sized against the lane like any
      * other note rather than against the screen.
      */
-    private val swellDiameter = laneHeight * 0.52f
+    private val swellDiameter = laneHeight * 0.62f
 
     /** The widest a denden's rings ever grow, which is what sizes its entity box. */
     private val swellRingMaxDiameter = swellDiameter * SWELL_RING_MAX_SCALE
 
     /** Height of a drum roll body, and therefore the diameter of its head. */
-    private val rollHeight = laneHeight * 0.34f
+    private val rollHeight = laneHeight * 0.42f
 
     /** Distance a note travels from spawn to the judgement circle. */
     private val travelDistance = spawnX - targetX
@@ -123,12 +153,14 @@ class TaikoGameScene private constructor(
     private val hudLayer = UIContainer()
     private lateinit var scoreCounter: HUDScoreCounter
     private lateinit var accuracyCounter: HUDAccuracyCounter
-    private lateinit var comboCounter: HUDComboCounter
     private lateinit var healthBar: HUDHealthBar
     private lateinit var songProgress: HUDSongProgress
     private lateinit var skipButton: UIAnimatedSprite
     private lateinit var inputFlash: UICircle
     private lateinit var hitExplosion: UICircle
+    private lateinit var kiaiGlow: UICircle
+    private lateinit var milestoneRing: UICircle
+    private lateinit var comboText: UIText
     private lateinit var songIntro: UIContainer
     private val judgementText: UIText
     private lateinit var loadingText: UIText
@@ -183,23 +215,38 @@ class TaikoGameScene private constructor(
     /** Notes before this index are all judged, so scanning can start here. */
     private var firstActiveIndex = 0
     private val decayingEntities = mutableListOf<DecayingEntity>()
-    private var greatWindow = 35.0
-    private var goodWindow = 80.0
-    private var missWindow = 95.0
-    private var isReady = false
-    private var isPaused = false
-    private var isFinished = false
-    private var judgementTimeRemaining = 0f
-    private var inputFlashTimeRemaining = 0f
-    private var explosionTimeRemaining = 0f
-    private var explosionBaseDiameter = 0f
-    private var introShownAt = System.currentTimeMillis()
-    private var isBeatmapLoaded = false
-    private var songHasStarted = false
-    private var leadInRemaining = 0.0
-    private var firstObjectStartTime = 0.0
-    private var lastObjectEndTime = 0.0
-    private var skipTargetTime = 0.0
+
+    /** Control points are kept around so kiai time can be resolved at any point in the map. */
+    private var controlPoints: BeatmapControlPoints? = null
+
+    // --- Hit windows ---------------------------------------------------------------------------
+
+    // Written with an explicit Double argument: `TaikoHitWindow()` is ambiguous because the class
+    // declares both a `Double?` primary constructor and a `Float?` secondary one, each defaulted.
+    private val hitWindow = TaikoHitWindow(5.0)
+    private val greatWindow get() = hitWindow.greatWindow
+    private val okWindow get() = hitWindow.okWindow
+
+    /** `TaikoHitWindow` calls this `mehWindow`; osu!taiko has no meh, it is the miss window. */
+    private val missWindow get() = hitWindow.mehWindow
+
+    // --- Scoring -------------------------------------------------------------------------------
+
+    /**
+     * Stable's "n": how much each ten combo is worth. See [TAIKO_SCORE_MULTIPLIERS].
+     */
+    private var taikoScoreMultiplier = DEFAULT_TAIKO_SCORE_MULTIPLIER
+
+    /** Score multiplier of the selected mods, folded into stable's combo step. */
+    private var modScoreMultiplier = 1f
+
+    /**
+     * Health gained or lost by a single object, as a fraction of the bar.
+     *
+     * Scaled so that a run which hits every note fills the bar exactly once. Only don/kat notes
+     * move health in osu!taiko, so that is the count this is derived from.
+     */
+    private var healthUnit = 0f
 
     private var score = 0L
     private var combo = 0
@@ -207,9 +254,43 @@ class TaikoGameScene private constructor(
     private var greatCount = 0
     private var goodCount = 0
     private var missCount = 0
-    private var rollHits = 0
     private var health = 0f
     private val isAutoPlay = mods.contains(ModAutoplay::class.java)
+
+    // --- Input ---------------------------------------------------------------------------------
+
+    /** Time of the most recent tap, used to tell two taps apart from one simultaneous pair. */
+    private var lastInputTime = Double.NEGATIVE_INFINITY
+    private var lastInputIsKat: Boolean? = null
+
+    /**
+     * The note judged by the most recent tap.
+     *
+     * A big note hit with a single key stays reachable for [STRONG_INPUT_WINDOW] so that the
+     * opposite colour landing immediately afterwards can upgrade it to a strong hit.
+     */
+    private var lastJudgedNote: TaikoObject? = null
+
+    // --- Presentation --------------------------------------------------------------------------
+
+    private var judgementTimeRemaining = 0f
+    private var inputFlashTimeRemaining = 0f
+    private var explosionTimeRemaining = 0f
+    private var explosionBaseDiameter = 0f
+    private var milestoneTimeRemaining = 0f
+
+    // --- Lifecycle -----------------------------------------------------------------------------
+
+    private var isReady = false
+    private var isPaused = false
+    private var isFinished = false
+    private var introShownAt = System.currentTimeMillis()
+    private var isBeatmapLoaded = false
+    private var songHasStarted = false
+    private var leadInRemaining = 0.0
+    private var firstObjectStartTime = 0.0
+    private var lastObjectEndTime = 0.0
+    private var skipTargetTime = 0.0
 
     /** Adapter bridging TaikoGameScene to GameScene for ScoringScene/GameLoaderScene. */
     private var gameAdapter: TaikoGameSceneAdapter? = null
@@ -235,41 +316,70 @@ class TaikoGameScene private constructor(
             alpha = (1f - Config.getBackgroundBrightness()).coerceIn(0f, 1f)
         }
 
-        // Warm header and dark upper-third lane based on the stable Taiko layout.
-        box {
-            width = FillParent
-            height = laneTop
-            color = Color4(0xFFF58B2A)
-            alpha = 0.92f
-        }
+        buildLane()
+        buildDrum()
+        buildHitTarget()
 
-        repeat(12) { index ->
-            val size = 10f + (index % 3) * 6f
-            circle {
-                x = leftPanelWidth + 35f + index * ((screenWidth - leftPanelWidth - 70f) / 12f)
-                y = 22f + (index % 4) * 20f
-                width = size
-                height = size
-                color = Color4.White
-                alpha = 0.18f
-            }
-        }
+        attachChild(playfield)
 
-        text {
-            x = leftPanelWidth + 22f
-            y = laneTop - 44f
+        judgementText = text {
+            x = targetX - 95f
+            y = judgementBaseY
+            width = 190f
+            alignment = Anchor.TopCenter
             font = resources.getFont("middleFont")
-            color = Color4.White
-            text = if (isAutoPlay) "Watching osu!taiko (BETA)" else "osu!taiko (BETA)"
+            text = ""
         }
 
-        box {
-            x = 0f
-            y = laneTop
-            width = FillParent
-            height = laneHeight
-            color = Color4(0xFF121218)
-            alpha = 0.97f
+        buildSongInfoBar()
+        createTaikoHud()
+        buildSkipButton()
+        buildSongIntro()
+
+        if (!isAutoPlay) {
+            setOnSceneTouchListener { _, event -> handleTouch(event) }
+        }
+    }
+
+    /**
+     * The scrolling band the notes travel along.
+     *
+     * osu!stable skins this with `taiko-slider`, a long tiled strip. When a skin provides one it is
+     * stretched across the band; otherwise the band is drawn as the two-tone dark strip stable's
+     * default art produces.
+     */
+    private fun buildLane() {
+        val sliderTexture = TaikoSkin[TaikoSkinNames.SLIDER]
+
+        if (sliderTexture != null) {
+            sprite {
+                x = 0f
+                y = laneTop
+                width = FillParent
+                height = laneHeight
+                scaleType = ScaleType.Crop
+                textureRegion = sliderTexture
+                alpha = 0.95f
+            }
+        } else {
+            box {
+                x = 0f
+                y = laneTop
+                width = FillParent
+                height = laneHeight
+                color = Color4(0xFF14141B)
+                alpha = 0.94f
+            }
+
+            // Stable's bar is lighter along the top and drops into shadow at the bottom.
+            box {
+                x = 0f
+                y = laneTop
+                width = FillParent
+                height = laneHeight * 0.45f
+                color = Color4(0xFF26262F)
+                alpha = 0.85f
+            }
         }
 
         box {
@@ -277,7 +387,8 @@ class TaikoGameScene private constructor(
             y = laneTop
             width = FillParent
             height = 3f
-            color = Color4(0xFF44444F)
+            color = Color4(0xFF4A4A57)
+            alpha = 0.9f
         }
 
         box {
@@ -286,76 +397,187 @@ class TaikoGameScene private constructor(
             width = FillParent
             height = 3f
             color = Color4(0xFF050507)
+            alpha = 0.9f
+        }
+    }
+
+    /**
+     * The drum on the far left.
+     *
+     * osu!stable draws the combo counter on the drum face, which is what makes the number readable
+     * without taking attention away from the lane. The drum is decorative here — the playable
+     * controls stay invisible and span the whole screen.
+     */
+    private fun buildDrum() {
+        val panel = TaikoSkin[TaikoSkinNames.BAR_LEFT]
+        val outer = TaikoSkin[TaikoSkinNames.DRUM_OUTER]
+        val inner = TaikoSkin[TaikoSkinNames.DRUM_INNER]
+
+        // Kiai glow sits behind the drum, expanding on every hit the way stable's `taiko-glow` does.
+        kiaiGlow = circle {
+            val size = drumDiameter * 1.25f
+            x = drumCenterX - size / 2f
+            y = laneY - size / 2f
+            width = size
+            height = size
+            color = Color4(0xFFFFD54F)
+            alpha = 0f
+        }
+        attachChild(kiaiGlow)
+
+        val drumContainer = UIContainer()
+        attachChild(drumContainer)
+
+        if (panel != null) {
+            val aspect = panel.height.toFloat() / panel.width.toFloat().coerceAtLeast(1f)
+            val panelHeight = drumDiameter * aspect
+
+            drumContainer.sprite {
+                x = 0f
+                y = laneY - panelHeight / 2f
+                width = drumDiameter
+                height = panelHeight
+                scaleType = ScaleType.Fit
+                textureRegion = panel
+            }
         }
 
-        // Left drum panel. It is decorative only; playable controls remain invisible.
-        box {
-            x = 0f
-            y = laneTop
-            width = leftPanelWidth
-            height = laneHeight
-            color = Color4(0xFFE83E78)
-            alpha = 0.96f
+        if (outer != null) {
+            drumContainer.sprite {
+                x = drumCenterX - drumDiameter / 2f
+                y = laneY - drumDiameter / 2f
+                width = drumDiameter
+                height = drumDiameter
+                scaleType = ScaleType.Fit
+                textureRegion = outer
+            }
+        } else {
+            // Drawn fallback: the red shell of a taiko drum.
+            drumContainer.circle {
+                x = drumCenterX - drumDiameter / 2f
+                y = laneY - drumDiameter / 2f
+                width = drumDiameter
+                height = drumDiameter
+                color = Color4(0xFFD6404A)
+            }
+
+            drumContainer.circle {
+                val inset = drumDiameter * 0.055f
+                x = drumCenterX - drumDiameter / 2f + inset
+                y = laneY - drumDiameter / 2f + inset
+                width = drumDiameter - inset * 2f
+                height = drumDiameter - inset * 2f
+                color = Color4(0xFFFFF3DC)
+            }
+
+            drumContainer.circle {
+                val inset = drumDiameter * 0.14f
+                x = drumCenterX - drumDiameter / 2f + inset
+                y = laneY - drumDiameter / 2f + inset
+                width = drumDiameter - inset * 2f
+                height = drumDiameter - inset * 2f
+                color = Color4(0xFF9C5A5F)
+                alpha = 0.28f
+                paintStyle = PaintStyle.Outline
+                lineWidth = 3f
+            }
         }
 
-        circle {
-            val diameter = laneHeight * 0.72f
-            x = (leftPanelWidth - diameter) / 2f
-            y = laneY - diameter / 2f
-            width = diameter
-            height = diameter
-            color = Color4(0xFFFFF7E8)
+        if (inner != null) {
+            drumContainer.sprite {
+                val size = drumDiameter * 0.62f
+                x = drumCenterX - size / 2f
+                y = laneY - size / 2f
+                width = size
+                height = size
+                scaleType = ScaleType.Fit
+                textureRegion = inner
+            }
+        }
+
+        comboText = drumContainer.text {
+            x = drumCenterX - 90f
+            y = laneY - 26f
+            width = 180f
+            alignment = Anchor.TopCenter
+            font = resources.getFont("strokeFont")
+            text = ""
+        }
+
+        // Combo milestones every 50 hits, drawn as a ring pulsing out of the drum.
+        milestoneRing = circle {
+            x = drumCenterX - drumDiameter / 2f
+            y = laneY - drumDiameter / 2f
+            width = drumDiameter
+            height = drumDiameter
+            color = Color4(0xFFFFF176)
+            alpha = 0f
+            paintStyle = PaintStyle.Outline
+            lineWidth = 6f
+        }
+        attachChild(milestoneRing)
+
+        // Header text, kept out of the way of the lane.
+        text {
+            x = 18f
+            y = 18f
+            font = resources.getFont("smallFont")
+            color = Color4.White
+            alpha = 0.75f
+            text = if (isAutoPlay) "Watching osu!taiko (BETA)" else "osu!taiko (BETA)"
+        }
+    }
+
+    /**
+     * The judgement circle the notes are struck on.
+     *
+     * Stable skins this with `approachcircle`, the same element osu!standard uses for its approach
+     * circles, and draws it as a border on the hit position.
+     */
+    private fun buildHitTarget() {
+        val approachCircle = TaikoSkin[TaikoSkinNames.APPROACH_CIRCLE]
+
+        if (approachCircle != null) {
+            sprite {
+                x = targetX - targetDiameter / 2f
+                y = laneY - targetDiameter / 2f
+                width = targetDiameter
+                height = targetDiameter
+                scaleType = ScaleType.Fit
+                textureRegion = approachCircle
+                alpha = 0.9f
+            }
+        } else {
+            circle {
+                x = targetX - targetDiameter / 2f
+                y = laneY - targetDiameter / 2f
+                width = targetDiameter
+                height = targetDiameter
+                color = Color4(0xFFFFFFFF)
+                alpha = 0.34f
+                paintStyle = PaintStyle.Outline
+                lineWidth = 9f
+            }
 
             circle {
-                x = 6f
-                y = 6f
-                width = diameter - 12f
-                height = diameter - 12f
-                color = Color4(0xFF9B8792)
-                alpha = 0.35f
+                val inner = targetDiameter * 0.74f
+                x = targetX - inner / 2f
+                y = laneY - inner / 2f
+                width = inner
+                height = inner
+                color = Color4(0xFFFFFFFF)
+                alpha = 0.8f
                 paintStyle = PaintStyle.Outline
                 lineWidth = 4f
             }
         }
 
-        text {
-            x = 0f
-            y = laneY - 13f
-            width = leftPanelWidth
-            alignment = Anchor.TopCenter
-            font = resources.getFont("smallFont")
-            color = Color4(0xFF4A3440)
-            text = "BETA"
-        }
-
-        // Static hit target with a warm hit-flash layer.
-        circle {
-            x = targetX - targetDiameter / 2f
-            y = laneY - targetDiameter / 2f
-            width = targetDiameter
-            height = targetDiameter
-            color = Color4(0xFFFFC13A)
-            alpha = 0.34f
-            paintStyle = PaintStyle.Outline
-            lineWidth = 10f
-        }
-
-        circle {
-            x = targetX - targetDiameter * 0.36f
-            y = targetDiameter.let { laneY - it * 0.36f }
-            width = targetDiameter * 0.72f
-            height = targetDiameter * 0.72f
-            color = Color4(0xFFFFFFFF)
-            alpha = 0.82f
-            paintStyle = PaintStyle.Outline
-            lineWidth = 4f
-        }
-
         inputFlash = circle {
-            x = targetX - targetDiameter * 0.46f
-            y = targetDiameter.let { laneY - it * 0.46f }
-            width = targetDiameter * 0.92f
-            height = targetDiameter * 0.92f
+            val size = targetDiameter * 0.92f
+            x = targetX - size / 2f
+            y = laneY - size / 2f
+            width = size
+            height = size
             color = DON_COLOR
             alpha = 0f
         }
@@ -372,38 +594,72 @@ class TaikoGameScene private constructor(
             paintStyle = PaintStyle.Outline
             lineWidth = 6f
         }
+    }
 
-        attachChild(playfield)
-
-        judgementText = text {
-            x = targetX - 95f
-            y = judgementBaseY
-            width = 190f
-            alignment = Anchor.TopCenter
-            font = resources.getFont("middleFont")
-            text = ""
-        }
-
+    private fun buildSongInfoBar() {
         box {
             x = 0f
             y = laneBottom
             width = FillParent
-            height = 42f
+            height = 40f
             color = Color4.Black
-            alpha = 0.78f
+            alpha = 0.72f
         }
 
         text {
-            x = leftPanelWidth + 18f
+            x = 18f
             y = laneBottom + 9f
-            width = screenWidth - leftPanelWidth - 36f
+            width = screenWidth - 36f
             alignment = Anchor.TopRight
             font = resources.getFont("smallFont")
             text = "${beatmapInfo.artistText} - ${beatmapInfo.titleText} [${beatmapInfo.version}]"
         }
+    }
 
-        createTaikoHud()
+    private fun createTaikoHud() {
+        hudLayer.width = FillParent
+        hudLayer.height = FillParent
+        attachChild(hudLayer)
 
+        val selectedLayout = OsuSkin.get().hudSkinData
+        val defaultLayout = HUDSkinData.Default
+
+        fun dataFor(type: KClass<out HUDElement>): HUDElementSkinData =
+            selectedLayout.elements.firstOrNull { it.type == type }
+                ?: defaultLayout.elements.first { it.type == type }
+
+        fun attach(element: HUDElement, data: HUDElementSkinData) {
+            hudLayer.attachChild(element)
+            element.setSkinData(data)
+        }
+
+        scoreCounter = HUDScoreCounter()
+        accuracyCounter = HUDAccuracyCounter()
+        healthBar = HUDHealthBar()
+
+        attach(scoreCounter, dataFor(HUDScoreCounter::class))
+        attach(accuracyCounter, dataFor(HUDAccuracyCounter::class))
+        attach(healthBar, dataFor(HUDHealthBar::class))
+
+        val progressData = selectedLayout.elements.firstOrNull {
+            it.type == HUDPieSongProgress::class || it.type == HUDLinearSongProgress::class
+        } ?: dataFor(HUDPieSongProgress::class)
+
+        songProgress = if (progressData.type == HUDLinearSongProgress::class) {
+            HUDLinearSongProgress()
+        } else {
+            HUDPieSongProgress()
+        }
+        attach(songProgress, progressData)
+
+        if (selectedLayout == defaultLayout) {
+            accuracyCounter.y += scoreCounter.y + scoreCounter.height
+            songProgress.y = accuracyCounter.y + accuracyCounter.transformedHeight / 2f
+            songProgress.x = accuracyCounter.x - accuracyCounter.transformedWidth - 18f
+        }
+    }
+
+    private fun buildSkipButton() {
         skipButton = UIAnimatedSprite(
             "play-skip",
             true,
@@ -415,7 +671,9 @@ class TaikoGameScene private constructor(
             isVisible = false
         }
         hudLayer.attachChild(skipButton)
+    }
 
+    private fun buildSongIntro() {
         // Fallback intro presentation. Normal flow uses the standard GameLoaderScene instead.
         songIntro = container {
             width = FillParent
@@ -467,55 +725,6 @@ class TaikoGameScene private constructor(
                 text = "Loading beatmap…"
             }
         }
-
-        if (!isAutoPlay) {
-            setOnSceneTouchListener { _, event -> handleTouch(event) }
-        }
-    }
-
-    private fun createTaikoHud() {
-        hudLayer.width = FillParent
-        hudLayer.height = FillParent
-        attachChild(hudLayer)
-
-        val selectedLayout = OsuSkin.get().hudSkinData
-        val defaultLayout = HUDSkinData.Default
-
-        fun dataFor(type: KClass<out HUDElement>): HUDElementSkinData =
-            selectedLayout.elements.firstOrNull { it.type == type }
-                ?: defaultLayout.elements.first { it.type == type }
-
-        fun attach(element: HUDElement, data: HUDElementSkinData) {
-            hudLayer.attachChild(element)
-            element.setSkinData(data)
-        }
-
-        scoreCounter = HUDScoreCounter()
-        accuracyCounter = HUDAccuracyCounter()
-        comboCounter = HUDComboCounter()
-        healthBar = HUDHealthBar()
-
-        attach(scoreCounter, dataFor(HUDScoreCounter::class))
-        attach(accuracyCounter, dataFor(HUDAccuracyCounter::class))
-        attach(comboCounter, dataFor(HUDComboCounter::class))
-        attach(healthBar, dataFor(HUDHealthBar::class))
-
-        val progressData = selectedLayout.elements.firstOrNull {
-            it.type == HUDPieSongProgress::class || it.type == HUDLinearSongProgress::class
-        } ?: dataFor(HUDPieSongProgress::class)
-
-        songProgress = if (progressData.type == HUDLinearSongProgress::class) {
-            HUDLinearSongProgress()
-        } else {
-            HUDPieSongProgress()
-        }
-        attach(songProgress, progressData)
-
-        if (selectedLayout == defaultLayout) {
-            accuracyCounter.y += scoreCounter.y + scoreCounter.height
-            songProgress.y = accuracyCounter.y + accuracyCounter.transformedHeight / 2f
-            songProgress.x = accuracyCounter.x - accuracyCounter.transformedWidth - 18f
-        }
     }
 
     /**
@@ -551,13 +760,7 @@ class TaikoGameScene private constructor(
                     throw IllegalArgumentException("This osu!taiko beatmap has no playable objects")
                 }
 
-                // osu!taiko hit windows. Unlike the previous approximation these keep GREAT, OK
-                // and MISS separate, so a late tap inside the miss window is still judged rather
-                // than the note silently disappearing at the OK boundary.
                 val od = parsed.difficulty.od.toDouble().coerceIn(0.0, 10.0)
-                val calculatedGreatWindow = (50.0 - 3.0 * od).coerceAtLeast(20.0)
-                val calculatedGoodWindow = if (od <= 5.0) 120.0 - 8.0 * od else 110.0 - 6.0 * od
-                val calculatedMissWindow = if (od <= 5.0) 135.0 - 8.0 * od else 120.0 - 5.0 * od
 
                 val firstObject = taikoObjects.first()
                 val firstObjectTime = firstObject.startTime
@@ -576,12 +779,31 @@ class TaikoGameScene private constructor(
                 songService.setGaming(true)
                 songService.seekTo(0)
 
+                // Only don/kat notes move health, so the bar is scaled by that count rather than by
+                // every object on the field.
+                val noteCount = taikoObjects.count { it.isNote }
+
+                val calculatedMultiplier = calculateTaikoScoreMultiplier(
+                    objectCount = noteCount,
+                    drainTimeSeconds = (lastObjectTime - firstObjectTime) / 1000.0,
+                    od = od,
+                    hp = parsed.difficulty.hp.toDouble()
+                )
+                val calculatedModMultiplier =
+                    ScoreMultiplierCalculator(parsed.difficulty).calculateFor(mods.values).toFloat()
+
                 updateThread {
                     objects = taikoObjects
                     firstActiveIndex = 0
-                    greatWindow = calculatedGreatWindow
-                    goodWindow = calculatedGoodWindow
-                    missWindow = calculatedMissWindow
+                    controlPoints = parsed.controlPoints
+
+                    // osu!taiko hit windows bend at OD 5, which TaikoHitWindow already encodes.
+                    hitWindow.overallDifficulty = od
+
+                    taikoScoreMultiplier = calculatedMultiplier
+                    modScoreMultiplier = calculatedModMultiplier
+                    healthUnit = if (noteCount > 0) 1f / noteCount else 0f
+
                     firstObjectStartTime = firstObjectTime
                     lastObjectEndTime = lastObjectTime
                     skipTargetTime = calculatedSkipTarget
@@ -663,11 +885,14 @@ class TaikoGameScene private constructor(
             }
 
             ObjectKind.Drumroll -> {
-                // Drum rolls are scored on discrete ticks rather than on raw tapping, so the tick
-                // times are precomputed here. Tick rate follows the map's slider tick rate, and
-                // the window a tick can be collected within is half the spacing between ticks.
-                val tickRate = if (difficulty.sliderTickRate.toInt() == 3) 3.0 else 4.0
-                val tickSpacing = timingPoint.msPerBeat / tickRate
+                // Drum rolls are scored on discrete ticks rather than on raw tapping, and stable
+                // hard-caps how many of them a roll carries: four per beat, or eight per beat on
+                // songs at 125 BPM or below. The window a tick can be collected within is half the
+                // spacing between ticks.
+                val bpm = 60000.0 / timingPoint.msPerBeat
+                val ticksPerBeat =
+                    if (bpm <= ROLL_SLOW_BPM_THRESHOLD) ROLL_TICKS_PER_BEAT_SLOW else ROLL_TICKS_PER_BEAT
+                val tickSpacing = timingPoint.msPerBeat / ticksPerBeat
 
                 if (tickSpacing > 0.0) {
                     val ticks = mutableListOf<Double>()
@@ -699,6 +924,40 @@ class TaikoGameScene private constructor(
             difficulty < 5.0 -> mid - (mid - min) * (5.0 - difficulty) / 5.0
             else -> mid
         }
+
+    /**
+     * Picks stable's "n" for [TAIKO_SCORE_MULTIPLIERS].
+     *
+     * Stable derives this from the beatmap's old five-star rating, which this client no longer
+     * computes, so it is approximated from the inputs that rating was built from: object density
+     * plus the drain and overall difficulty settings. The thresholds are placed so that an ordinary
+     * map lands on 80, the value stable is documented to use for mid-high difficulties.
+     */
+    private fun calculateTaikoScoreMultiplier(
+        objectCount: Int,
+        drainTimeSeconds: Double,
+        od: Double,
+        hp: Double
+    ): Int {
+        val density = if (drainTimeSeconds > 0.0) {
+            (objectCount / drainTimeSeconds * 8.0).coerceIn(0.0, 16.0)
+        } else {
+            0.0
+        }
+
+        val rating = (hp + od + density) / 38.0 * 10.0
+
+        for (index in TAIKO_SCORE_MULTIPLIER_THRESHOLDS.indices) {
+            if (rating < TAIKO_SCORE_MULTIPLIER_THRESHOLDS[index]) {
+                return TAIKO_SCORE_MULTIPLIERS[index]
+            }
+        }
+        return TAIKO_SCORE_MULTIPLIERS.last()
+    }
+
+    /** Whether kiai (Go-Go) time is in effect at [time]. */
+    private fun isKiaiAt(time: Double): Boolean =
+        controlPoints?.effect?.controlPointAt(time)?.isKiai ?: false
 
     override fun onManagedUpdate(deltaTimeSec: Float) {
         if (
@@ -742,6 +1001,12 @@ class TaikoGameScene private constructor(
             updateDecayingEntities(deltaTimeSec)
         }
 
+        updateHitFeedback(deltaTimeSec)
+
+        super.onManagedUpdate(deltaTimeSec)
+    }
+
+    private fun updateHitFeedback(deltaTimeSec: Float) {
         // Judgement text drifts upward as it fades instead of blinking out.
         if (judgementTimeRemaining > 0f) {
             judgementTimeRemaining -= deltaTimeSec
@@ -780,8 +1045,36 @@ class TaikoGameScene private constructor(
             hitExplosion.alpha = 0f
         }
 
-        super.onManagedUpdate(deltaTimeSec)
+        // Combo milestone ring, pulsing out of the drum.
+        if (milestoneTimeRemaining > 0f) {
+            milestoneTimeRemaining -= deltaTimeSec
+
+            val progress =
+                1f - (milestoneTimeRemaining / COMBO_MILESTONE_DURATION).coerceIn(0f, 1f)
+            val diameter = drumDiameter * (1f + 0.55f * progress)
+
+            milestoneRing.width = diameter
+            milestoneRing.height = diameter
+            milestoneRing.x = drumCenterX - diameter / 2f
+            milestoneRing.y = laneY - diameter / 2f
+            milestoneRing.alpha = (0.9f * (1f - progress)).coerceIn(0f, 1f)
+        } else {
+            milestoneRing.alpha = 0f
+        }
+
+        // Kiai glow. Stable shows it behind the hit position and expands it on every hit.
+        if (isReady && !isFinished && isKiaiAt(currentTime)) {
+            kiaiGlow.alpha = (0.16f + inputFlash.alpha * 0.35f).coerceIn(0f, 0.5f)
+        } else {
+            kiaiGlow.alpha = 0f
+        }
+
+        comboText.text = if (combo > 0) combo.toString() else ""
     }
+
+    /** The current audio time, in milliseconds. */
+    private val currentTime: Double
+        get() = if (songHasStarted) songService.positionPrecise else -leadInRemaining
 
     private fun updateDecayingEntities(deltaTimeSec: Float) {
         if (decayingEntities.isEmpty()) {
@@ -968,7 +1261,8 @@ class TaikoGameScene private constructor(
 
             when (obj.kind) {
                 ObjectKind.Don, ObjectKind.Kat -> {
-                    // Hit the note exactly at its start time.
+                    // Hit the note exactly at its start time, with both colours on a big note so
+                    // autoplay collects the strong bonus the way a player would.
                     if (now >= obj.startTime) {
                         autoHitNote(obj, obj.kind == ObjectKind.Kat)
                     }
@@ -997,17 +1291,7 @@ class TaikoGameScene private constructor(
         inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
 
-        val multiplier = if (obj.isBig) 2 else 1
-        greatCount++
-        combo++
-        score += (300L + combo * 12L) * multiplier
-        health = (health + 0.025f * multiplier).coerceAtMost(1f)
-        showJudgement("GREAT", Color4(0xFFFFD54F))
-        triggerHitExplosion(isKat, obj.isBig)
-        maxCombo = max(maxCombo, combo)
-
-        playSamples(obj)
-        releaseHit(obj)
+        registerNoteHit(obj, isKat, bothColours = obj.isBig, now = obj.startTime)
     }
 
     private fun autoHitRoll(obj: TaikoObject, now: Double) {
@@ -1021,6 +1305,7 @@ class TaikoGameScene private constructor(
 
         inputFlash.color = DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        playInputSound(false, now)
         registerRollHit(obj, false, now)
     }
 
@@ -1034,35 +1319,12 @@ class TaikoGameScene private constructor(
         val isKat = obj.lastHitKat != true
         inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        playInputSound(isKat, now)
         registerDendenHit(obj, isKat, now)
     }
 
     private fun createObjectEntity(obj: TaikoObject): UIComponent = when (obj.kind) {
-        ObjectKind.Don, ObjectKind.Kat -> UICircle().apply {
-            val diameter = if (obj.isBig) bigNoteDiameter else normalNoteDiameter
-            width = diameter
-            height = diameter
-            color = Color4.White
-
-            circle {
-                val inset = if (obj.isBig) 7f else 5f
-                x = inset
-                y = inset
-                width = diameter - inset * 2f
-                height = diameter - inset * 2f
-                color = if (obj.kind == ObjectKind.Kat) KAT_COLOR else DON_COLOR
-            }
-
-            circle {
-                val centerSize = diameter * 0.27f
-                x = (diameter - centerSize) / 2f
-                y = (diameter - centerSize) / 2f
-                width = centerSize
-                height = centerSize
-                color = Color4.White
-                alpha = 0.78f
-            }
-        }
+        ObjectKind.Don, ObjectKind.Kat -> createNoteEntity(obj)
 
         ObjectKind.Drumroll -> UIContainer().apply {
             // osu!lazer draws the body one full height longer than the roll's duration, which is
@@ -1081,7 +1343,7 @@ class TaikoGameScene private constructor(
                 width = durationWidth + rollHeight
                 height = rollHeight
                 cornerRadius = rollHeight / 2f
-                color = rollColour(0)
+                color = ROLL_IDLE_COLOR
                 alpha = 0.9f
             }
 
@@ -1091,7 +1353,7 @@ class TaikoGameScene private constructor(
                 y = 0f
                 width = rollHeight
                 height = rollHeight
-                color = rollColour(0)
+                color = ROLL_HEAD_COLOR
             }
         }
 
@@ -1150,6 +1412,75 @@ class TaikoGameScene private constructor(
         }
     }
 
+    /**
+     * Builds a don or kat note.
+     *
+     * When the running skin provides `taikohitcircle` / `taikobigcircle` the note is that texture
+     * tinted with stable's don or kat colour; otherwise it is drawn as the flat circle stable's
+     * default art produces. osu!stable only shows the note overlay once a combo milestone has been
+     * reached, so the overlay is attached at spawn time based on the current combo.
+     */
+    private fun createNoteEntity(obj: TaikoObject): UIComponent {
+        val diameter = if (obj.isBig) bigNoteDiameter else normalNoteDiameter
+        val noteColor = if (obj.kind == ObjectKind.Kat) KAT_COLOR else DON_COLOR
+
+        val body = TaikoSkin.noteBody(obj.isBig)
+        val overlay = TaikoSkin.noteOverlay(obj.isBig)
+
+        return if (body != null) {
+            UIContainer().apply {
+                width = diameter
+                height = diameter
+
+                obj.noteSprite = sprite {
+                    x = 0f
+                    y = 0f
+                    width = diameter
+                    height = diameter
+                    scaleType = ScaleType.Fit
+                    textureRegion = body
+                    color = noteColor
+                }
+
+                if (overlay != null && combo >= COMBO_MILESTONE_INTERVAL) {
+                    obj.noteOverlaySprite = sprite {
+                        x = 0f
+                        y = 0f
+                        width = diameter
+                        height = diameter
+                        scaleType = ScaleType.Fit
+                        textureRegion = overlay
+                    }
+                }
+            }
+        } else {
+            UICircle().apply {
+                width = diameter
+                height = diameter
+                color = Color4.White
+
+                circle {
+                    val inset = if (obj.isBig) 7f else 5f
+                    x = inset
+                    y = inset
+                    width = diameter - inset * 2f
+                    height = diameter - inset * 2f
+                    color = noteColor
+                }
+
+                circle {
+                    val centerSize = diameter * 0.27f
+                    x = (diameter - centerSize) / 2f
+                    y = (diameter - centerSize) / 2f
+                    width = centerSize
+                    height = centerSize
+                    color = Color4.White
+                    alpha = 0.78f
+                }
+            }
+        }
+    }
+
     private fun handleTouch(event: TouchEvent): Boolean {
         if (!event.isActionDown || !isReady || isPaused || isFinished) {
             return false
@@ -1166,15 +1497,47 @@ class TaikoGameScene private constructor(
 
         // Four invisible full-height controls: outer quarters are Kat, inner quarters are Don.
         val isKat = event.x < screenWidth / 4f || event.x >= screenWidth * 3f / 4f
-        val now = if (songHasStarted) songService.positionPrecise else -leadInRemaining
-        registerInput(isKat, now)
+        registerInput(isKat, currentTime)
         return true
     }
 
+    /**
+     * Judges a tap.
+     *
+     * osu!stable is strict about colour. Hitting a note with the wrong key — or hitting both keys
+     * on a note that is not a big one — is a miss. A big note needs both keys together for its
+     * double score, but a single correct key still connects for the ordinary value.
+     */
     private fun registerInput(isKat: Boolean, now: Double) {
         inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
         inputFlashTimeRemaining = INPUT_FLASH_DURATION
 
+        // Two taps of opposite colour landing this close together are one simultaneous hit.
+        val bothColours = lastInputIsKat != null &&
+            lastInputIsKat != isKat &&
+            now - lastInputTime <= STRONG_INPUT_WINDOW
+
+        lastInputTime = now
+        lastInputIsKat = isKat
+
+        // A big note struck with a single key can still be upgraded while the opposite colour is
+        // arriving, which is what a player pressing both thumbs down actually produces.
+        if (bothColours) {
+            val pending = lastJudgedNote
+
+            if (pending != null && pending.isBig && !pending.strongHit &&
+                now - pending.judgedAt <= STRONG_INPUT_WINDOW
+            ) {
+                lastJudgedNote = null
+                playInputSound(isKat, now)
+                upgradeToStrongHit(pending, isKat)
+                return
+            }
+        }
+
+        playInputSound(isKat, now)
+
+        // Denden first: it swallows every tap while it is on the field.
         val activeDenden = objects.firstOrNull {
             !it.judged && it.kind == ObjectKind.Denden && now in it.startTime..it.endTime
         }
@@ -1200,42 +1563,123 @@ class TaikoGameScene private constructor(
             .filter {
                 !it.judged &&
                     (it.kind == ObjectKind.Don || it.kind == ObjectKind.Kat) &&
-                    abs(now - it.startTime) <= goodWindow
+                    abs(now - it.startTime) <= missWindow
             }
             .minByOrNull { abs(now - it.startTime) }
 
         if (candidate == null) {
-            playInputSound(isKat, now)
             return
         }
 
-        val expectsKat = candidate.kind == ObjectKind.Kat
-        if (expectsKat != isKat) {
-            playInputSound(isKat, now)
+        registerNoteHit(candidate, isKat, bothColours, now)
+    }
+
+    /**
+     * Applies osu!stable's ScoreV1 for osu!taiko:
+     *
+     * `Score = {ScoreValue + [min(RoundDown(Combo / 10), 10) * RoundDown(n * mod multiplier)]} * kiai`
+     *
+     * where `ScoreValue` is 300 for a GREAT and 150 for a GOOD, doubled on a big note. The combo
+     * feeding it is the combo before this hit, minus one.
+     */
+    private fun scoreForHit(baseValue: Long, isKiai: Boolean): Long {
+        val comboBeforeThisHit = (combo - 1).coerceAtLeast(0)
+        val comboSteps = comboBeforeThisHit.coerceAtMost(COMBO_SCORE_LIMIT) / COMBO_SCORE_STEP
+        val step = floor(taikoScoreMultiplier * modScoreMultiplier).toLong()
+
+        val value = baseValue + comboSteps * step
+        return (value * if (isKiai) KIAI_SCORE_MULTIPLIER else 1f).toLong()
+    }
+
+    private fun baseScoreValue(result: HitResult, isBig: Boolean): Long {
+        val value = when (result) {
+            HitResult.Great -> SCORE_VALUE_GREAT
+            HitResult.Good -> SCORE_VALUE_GOOD
+            HitResult.Miss -> 0L
+        }
+        return if (isBig) value * 2L else value
+    }
+
+    private fun registerNoteHit(obj: TaikoObject, isKat: Boolean, bothColours: Boolean, now: Double) {
+        // osu!stable calls a wrong-colour tap a miss, and colour is the whole point of the mode:
+        // without it every note could be cleared by mashing a single key.
+        //
+        // Stable additionally misses a note when both colours are struck at once on a note that
+        // isn't big. That half of the rule is deliberately not replicated: this scene judges on the
+        // first tap so that input stays latency-free, which means the "both keys" case is
+        // indistinguishable from a fast alternating stream once the first tap has landed. Applying
+        // it would punish legitimate play at high BPM.
+        if (obj.kind == ObjectKind.Kat != isKat) {
+            registerMiss(obj)
             return
         }
 
-        val offset = abs(now - candidate.startTime)
-        val multiplier = if (candidate.isBig) 2 else 1
-
-        if (offset <= greatWindow) {
-            greatCount++
-            combo++
-            score += (300L + combo * 12L) * multiplier
-            health = (health + 0.025f * multiplier).coerceAtMost(1f)
-            showJudgement("GREAT", Color4(0xFFFFD54F))
-        } else {
-            goodCount++
-            combo++
-            score += (100L + combo * 4L) * multiplier
-            health = (health + 0.0125f * multiplier).coerceAtMost(1f)
-            showJudgement("GOOD", Color4(0xFF81D4FA))
+        val offset = abs(now - obj.startTime)
+        val result = when {
+            offset <= greatWindow -> HitResult.Great
+            offset <= okWindow -> HitResult.Good
+            else -> HitResult.Miss
         }
 
-        triggerHitExplosion(isKat, candidate.isBig)
+        if (result == HitResult.Miss) {
+            registerMiss(obj)
+            return
+        }
+
+        val isStrong = obj.isBig && bothColours
+        val isKiai = isKiaiAt(now)
+
+        val baseValue = baseScoreValue(result, isStrong)
+        val gained = scoreForHit(baseValue, isKiai)
+
+        obj.strongHit = isStrong
+        obj.judgedIsKat = isKat
+        obj.judgedOffset = offset
+        obj.judgedAt = now
+        obj.judgedScore = gained
+
+        score += gained
+
+        when (result) {
+            HitResult.Great -> greatCount++
+            HitResult.Good -> goodCount++
+            HitResult.Miss -> missCount++
+        }
+
+        combo++
         maxCombo = max(maxCombo, combo)
-        playSamples(candidate)
-        releaseHit(candidate)
+
+        addHealth(
+            when (result) {
+                HitResult.Great -> HEALTH_PER_GREAT
+                HitResult.Good -> HEALTH_PER_GOOD
+                HitResult.Miss -> HEALTH_PER_MISS
+            } * if (isStrong) 2f else 1f
+        )
+
+        checkComboMilestone()
+        showJudgementText(result, isStrong)
+        showBurst(result, isKat)
+        playSamples(obj)
+        releaseHit(obj)
+
+        lastJudgedNote = obj
+    }
+
+    /**
+     * Upgrades a big note that was struck with one key to a strong hit.
+     *
+     * A strong hit is worth exactly double what the single key paid, so the upgrade simply pays the
+     * original amount again rather than recomputing the judgement.
+     */
+    private fun upgradeToStrongHit(obj: TaikoObject, isKat: Boolean) {
+        obj.strongHit = true
+        score += obj.judgedScore
+
+        addHealth(HEALTH_PER_GREAT)
+
+        showJudgementText(HitResult.Great, true)
+        showBurst(HitResult.Great, isKat)
     }
 
     /**
@@ -1246,8 +1690,7 @@ class TaikoGameScene private constructor(
      * heal, and each counted hit is worth a flat score regardless of timing.
      */
     private fun registerDendenHit(obj: TaikoObject, isKat: Boolean, now: Double) {
-        playInputSound(isKat, now)
-        triggerHitExplosion(isKat, false)
+        triggerHitExplosion(isKat, false, HitResult.Great)
 
         if (obj.lastHitKat == isKat) {
             return
@@ -1261,18 +1704,19 @@ class TaikoGameScene private constructor(
         obj.counterText?.text = remaining.toString()
 
         if (obj.hitsSoFar >= obj.requiredHits) {
-            completeDenden(obj)
+            completeDenden(obj, now)
         } else {
             showJudgement("DEN!", Color4(0xFFFFC107))
         }
     }
 
     /**
-     * Clears a denden. Completion is worth a large GREAT with the current combo multiplier, but
-     * still does not increment combo itself.
+     * Clears a denden. Completion is worth a GREAT big note, which is the one denden score kiai
+     * does apply to. It still does not increment combo.
      */
-    private fun completeDenden(obj: TaikoObject) {
-        score += DENDEN_COMPLETE_SCORE + combo * 12L
+    private fun completeDenden(obj: TaikoObject, now: Double) {
+        score += scoreForHit(baseScoreValue(HitResult.Great, true), isKiaiAt(now))
+
         showJudgement("CLEAR!", Color4(0xFFFFD54F))
 
         obj.judged = true
@@ -1300,7 +1744,7 @@ class TaikoGameScene private constructor(
      */
     private fun expireDenden(obj: TaikoObject) {
         if (obj.hitsSoFar < obj.requiredHits) {
-            health = (health - 0.07f).coerceAtLeast(0f)
+            addHealth(HEALTH_PER_DENDEN_FAIL)
         }
 
         obj.counterText = null
@@ -1312,14 +1756,13 @@ class TaikoGameScene private constructor(
     /**
      * Handles a tap landing on a drum roll.
      *
-     * Drum rolls are not scored on raw tapping speed: they carry discrete ticks, and a tap only
-     * counts if it lands within half a tick spacing of the next uncollected tick. Tapping faster
-     * than the ticks appear collects nothing extra, and tapping too slowly simply lets ticks go by.
-     * Missed ticks carry no score penalty, but they do cool the body's colour back down.
+     * Drum rolls are not scored on raw tapping speed: they carry a fixed number of ticks, and a tap
+     * only counts if it lands within half a tick spacing of the next uncollected tick. Tapping
+     * faster than the ticks appear collects nothing extra, and tapping too slowly simply lets ticks
+     * go by. Missed ticks carry no score penalty, but they do cool the body's colour back down.
      */
     private fun registerRollHit(obj: TaikoObject, isKat: Boolean, now: Double) {
-        playInputSound(isKat, now)
-        triggerHitExplosion(isKat, obj.isBig)
+        triggerHitExplosion(isKat, obj.isBig, HitResult.Great)
 
         // Step past any ticks whose window has already closed.
         while (
@@ -1344,9 +1787,7 @@ class TaikoGameScene private constructor(
         obj.ticksHit++
         obj.rollingHits = (obj.rollingHits + 1).coerceAtMost(ROLL_ENGAGED_HITS)
         updateRollColour(obj)
-        rollHits++
         score += if (obj.isBig) BIG_ROLL_TICK_SCORE else ROLL_TICK_SCORE
-        showJudgement("ROLL", Color4(0xFFFFC107))
     }
 
     /**
@@ -1366,11 +1807,11 @@ class TaikoGameScene private constructor(
     private fun rollColour(rollingHits: Int): Color4 {
         val t = (rollingHits.toFloat() / ROLL_ENGAGED_HITS).coerceIn(0f, 1f)
 
-        val red = (0xFB + (0xF9 - 0xFB) * t).toInt().toLong()
-        val green = (0xC0 + (0xA8 - 0xC0) * t).toInt().toLong()
-        val blue = (0x2D + (0x25 - 0x2D) * t).toInt().toLong()
-
-        return Color4(0xFF000000L or (red shl 16) or (green shl 8) or blue)
+        return Color4(
+            ROLL_IDLE_COLOR.red + (ROLL_ENGAGED_COLOR.red - ROLL_IDLE_COLOR.red) * t,
+            ROLL_IDLE_COLOR.green + (ROLL_ENGAGED_COLOR.green - ROLL_IDLE_COLOR.green) * t,
+            ROLL_IDLE_COLOR.blue + (ROLL_ENGAGED_COLOR.blue - ROLL_IDLE_COLOR.blue) * t
+        )
     }
 
     /**
@@ -1487,19 +1928,74 @@ class TaikoGameScene private constructor(
     private fun registerMiss(obj: TaikoObject) {
         missCount++
         combo = 0
-        health = (health - 0.07f).coerceAtLeast(0f)
+        lastJudgedNote = null
+        addHealth(HEALTH_PER_MISS)
         showJudgement("MISS", Color4(0xFFB0BEC5))
+        showBurst(HitResult.Miss, obj.kind == ObjectKind.Kat)
         releaseMiss(obj)
     }
 
+    private fun addHealth(units: Float) {
+        health = (health + units * healthUnit).coerceIn(0f, 1f)
+    }
+
+    /** osu!stable celebrates a combo milestone every 50 hits rather than osu!'s 25. */
+    private fun checkComboMilestone() {
+        if (combo > 0 && combo % COMBO_MILESTONE_INTERVAL == 0) {
+            milestoneTimeRemaining = COMBO_MILESTONE_DURATION
+        }
+    }
+
     /**
-     * Fires the burst at the judgement circle. The size follows the note that was hit, but the
-     * position never does, which is what keeps the feedback readable at high scroll speeds.
+     * Fires the burst at the judgement circle.
+     *
+     * When the skin provides `taiko-hit300` and friends that sprite is used; the expanding ring is
+     * drawn either way, because stable's default effect applies on top of the skinned burst.
      */
-    private fun triggerHitExplosion(isKat: Boolean, isBig: Boolean) {
+    private fun showBurst(result: HitResult, isKat: Boolean) {
+        val texture = TaikoSkin.burstFor(result, isKat)
+
+        if (texture != null) {
+            val sprite = UISprite(texture).apply {
+                x = targetX - burstDiameter / 2f
+                y = laneY - burstDiameter / 2f
+                width = burstDiameter
+                height = burstDiameter
+                scaleType = ScaleType.Fit
+            }
+            playfield.attachChild(sprite)
+            decayingEntities.add(
+                DecayingEntity(sprite, JUDGEMENT_DURATION, JUDGEMENT_DURATION, 0f, -70f)
+            )
+        }
+
+        triggerHitExplosion(isKat, false, result)
+    }
+
+    /**
+     * Fires the expanding ring at the judgement circle. The size follows the note that was hit, but
+     * the position never does, which is what keeps the feedback readable at high scroll speeds.
+     */
+    private fun triggerHitExplosion(isKat: Boolean, isBig: Boolean, result: HitResult) {
+        if (result == HitResult.Miss) {
+            return
+        }
+
         explosionBaseDiameter = if (isBig) bigNoteDiameter else normalNoteDiameter
         hitExplosion.color = if (isKat) KAT_COLOR else DON_COLOR
         explosionTimeRemaining = EXPLOSION_DURATION
+    }
+
+    private fun showJudgementText(result: HitResult, isStrong: Boolean) {
+        when (result) {
+            HitResult.Great -> showJudgement(
+                if (isStrong) "GREAT x2" else "GREAT",
+                Color4(0xFFFFD54F)
+            )
+
+            HitResult.Good -> showJudgement("GOOD", Color4(0xFF81D4FA))
+            HitResult.Miss -> showJudgement("MISS", Color4(0xFFB0BEC5))
+        }
     }
 
     /**
@@ -1512,6 +2008,9 @@ class TaikoGameScene private constructor(
      */
     private fun releaseHit(obj: TaikoObject) {
         obj.judged = true
+        obj.noteSprite = null
+        obj.noteOverlaySprite = null
+
         obj.entity?.let { entity ->
             entity.x = targetX - entity.width / 2f
             entity.y = laneY - entity.height / 2f
@@ -1532,6 +2031,9 @@ class TaikoGameScene private constructor(
     /** Judged as a miss: the note keeps travelling at its own speed and fades out. */
     private fun releaseMiss(obj: TaikoObject) {
         obj.judged = true
+        obj.noteSprite = null
+        obj.noteOverlaySprite = null
+
         obj.entity?.let { entity ->
             decayingEntities.add(
                 DecayingEntity(
@@ -1568,7 +2070,6 @@ class TaikoGameScene private constructor(
     private fun updateHud(now: Double, deltaTimeSec: Float) {
         scoreCounter.setScore(score)
         accuracyCounter.setAccuracy(calculateAccuracy().toFloat())
-        comboCounter.setCombo(combo)
         healthBar.setHealth(health, deltaTimeSec)
 
         if (now < firstObjectStartTime) {
@@ -1638,6 +2139,9 @@ class TaikoGameScene private constructor(
         }
         updateHud(lastObjectEndTime, 0.2f)
 
+        // osu!taiko only passes once the bar is at least half full.
+        val passed = health >= HEALTH_PASS_THRESHOLD
+
         // Build a StatisticV2 from taiko stats so the existing standard results screen can show them.
         val stat = StatisticV2().apply {
             setMod(mods)
@@ -1653,6 +2157,8 @@ class TaikoGameScene private constructor(
             setDiffModifier(1f)
             calculateModScoreMultiplier(null)
         }
+
+        Log.i("TaikoGameScene", "osu!taiko beta run finished (passed=$passed, health=$health)")
 
         // Use the existing ScoringScene (results screen) instead of a placeholder modal.
         // The taiko adapter is passed so the retry button restarts taiko.
