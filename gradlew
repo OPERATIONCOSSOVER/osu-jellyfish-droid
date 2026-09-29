@@ -246,4 +246,27 @@ eval "set -- $(
         tr '\n' ' '
     )" '"$@"'
 
-exec "$JAVACMD" "$@"
+# TEMPORARY BUILD DIAGNOSTIC - REMOVE BEFORE MERGE.
+# Raw CI job logs cannot be downloaded from this environment, so Gradle's compiler diagnostics
+# are re-emitted as GitHub Actions annotations, which are readable through the Checks API.
+DIAG_LOG="${TMPDIR:-/tmp}/gradle-diag-$$.log"
+DIAG_STATUS_FILE="${DIAG_LOG}.status"
+( "$JAVACMD" "$@" 2>&1; echo $? > "$DIAG_STATUS_FILE" ) | tee "$DIAG_LOG"
+DIAG_STATUS=`cat "$DIAG_STATUS_FILE" 2>/dev/null`
+if [ -z "$DIAG_STATUS" ]; then DIAG_STATUS=1; fi
+rm -f "$DIAG_STATUS_FILE"
+
+if [ "$DIAG_STATUS" != "0" ]; then
+    echo "::error::DIAG_GRADLE_EXIT=$DIAG_STATUS"
+    DIAG_LINES=`grep -E '^e: |^w: |error:|Execution failed for task|What went wrong' "$DIAG_LOG" | awk '!seen[$0]++' | head -60`
+    if [ -z "$DIAG_LINES" ]; then
+        DIAG_LINES=`tail -40 "$DIAG_LOG"`
+    fi
+    printf '%s\n' "$DIAG_LINES" | while IFS= read -r diag_line; do
+        diag_msg=`printf '%s' "$diag_line" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | cut -c 1-380`
+        echo "::error::$diag_msg"
+    done
+fi
+rm -f "$DIAG_LOG"
+exit "$DIAG_STATUS"
+# END TEMPORARY BUILD DIAGNOSTIC
