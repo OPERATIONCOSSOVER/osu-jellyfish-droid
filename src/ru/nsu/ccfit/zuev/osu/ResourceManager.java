@@ -98,6 +98,42 @@ public class ResourceManager {
      */
     private static final Regex ANIMATABLE_TEXTURE_REGEX = new Regex("^(" + joinToString(ANIMATABLE_TEXTURES, "|", "", "", -1, "", null) + ")(\\d+)$");
 
+    /**
+     * The osu!taiko skin elements.
+     *
+     * <p>Every other texture this class knows about is discovered by listing {@code assets/gfx},
+     * because the skin folder is matched against that list. osu!taiko art deliberately has no
+     * built-in counterpart, so these names are declared here and resolved against the skin folder
+     * explicitly instead. They are always optional: a skin without osu!taiko art simply leaves them
+     * unresolved, and the ruleset draws those parts programmatically.</p>
+     */
+    private static final String[] TAIKO_SKIN_TEXTURES = {
+        "taiko-bar-left",
+        "taiko-drum-inner",
+        "taiko-drum-outer",
+        "taiko-slider",
+        "taiko-slider-fail",
+        "taiko-glow",
+        "taikohitcircle",
+        "taikobigcircle",
+        "taikohitcircleoverlay",
+        "taikobigcircleoverlay",
+        "taiko-hit300",
+        "taiko-hit300k",
+        "taiko-hit100",
+        "taiko-hit100k",
+        "taiko-hit0",
+    };
+
+    private static boolean isTaikoSkinTexture(String name) {
+        for (var texture : TAIKO_SKIN_TEXTURES) {
+            if (texture.equals(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private final static ResourceManager mgr = new ResourceManager();
 
     private final Map<String, Font> fonts = new HashMap<>();
@@ -290,6 +326,16 @@ public class ResourceManager {
                         loadTexture(textureName, "gfx/" + assetName, false);
                         parseFrameIndex(textureName, false, false);
                     }
+                }
+            }
+
+            // osu!taiko elements have no built-in texture to fall back to, so they are matched
+            // against the skin folder separately from the gfx asset list above.
+            for (var textureName : TAIKO_SKIN_TEXTURES) {
+                if (availableFiles.containsKey(textureName)) {
+                    loadTexture(textureName, Objects.requireNonNull(availableFiles.get(textureName)).getPath(), true);
+                } else {
+                    unloadTexture(textureName);
                 }
             }
 
@@ -664,6 +710,28 @@ public class ResourceManager {
         return null;
     }
 
+    /**
+     * Returns a texture only when the currently selected skin provides one, without ever falling
+     * back to the built-in asset pack.
+     *
+     * <p>Used by osu!taiko, whose skin elements have no built-in counterpart: a missing element has
+     * to be reported as absent so the ruleset can draw it programmatically rather than being handed
+     * a blank region and rendering nothing.</p>
+     */
+    public TextureRegion getSkinTextureIfLoaded(final String resname) {
+        if (BeatmapSkinManager.isSkinEnabled() && customTextures.containsKey(resname)) {
+            return customTextures.get(resname);
+        }
+
+        var texture = textures.get(resname);
+
+        // loadTexture() hands back a blank region when an external file turns out to be missing.
+        if (texture instanceof BlankTextureRegion) {
+            return null;
+        }
+        return texture;
+    }
+
     public boolean isTextureLoaded(final String resname) {
         return textures.containsKey(resname);
     }
@@ -778,7 +846,10 @@ public class ResourceManager {
 
         String delimiter = "-";
 
-        if (parseFrameIndex(resname, true, true) < 0 && !textures.containsKey(resname)) {
+        // osu!taiko elements are accepted on their own merits, since a beatmap skin may provide
+        // them even though the built-in asset pack does not.
+        if (parseFrameIndex(resname, true, true) < 0 && !textures.containsKey(resname)
+                && !isTaikoSkinTexture(resname)) {
             if (textures.containsKey(resname + "-0") || textures.containsKey(resname + "0")) {
                 if (textures.containsKey(resname + "0")) {
                     delimiter = "";
