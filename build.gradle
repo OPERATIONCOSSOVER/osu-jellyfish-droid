@@ -22,6 +22,59 @@ plugins {
     id 'com.google.devtools.ksp' version '2.1.10-1.0.31'
 }
 
+// TEMPORARY BUILD DIAGNOSTIC - REMOVE BEFORE MERGE.
+// Raw workflow logs cannot be downloaded from CI, so compiler errors are re-emitted as GitHub
+// Actions annotations, which are readable through the Checks API.
+def __diagBuf = new StringBuilder()
+def __diagOrigOut = System.out
+def __diagOrigErr = System.err
+def __diagTee = new PrintStream(new OutputStream() {
+    @Override void write(int b) {
+        __diagOrigOut.write(b)
+        __diagBuf.append((char) b)
+    }
+    @Override void write(byte[] b, int off, int len) {
+        __diagOrigOut.write(b, off, len)
+        __diagBuf.append(new String(b, off, len))
+    }
+    @Override void flush() { __diagOrigOut.flush() }
+}, true)
+System.setOut(__diagTee)
+System.setErr(__diagTee)
+
+gradle.taskGraph.afterTask { task, state ->
+    if (state.failure != null) {
+        def sb = new StringBuilder()
+        sb.append("FAILED_TASK=").append(task.path).append('\n')
+        def t = state.failure
+        for (int i = 0; i < 8 && t != null; i++) {
+            sb.append("CAUSE[").append(i).append("] ").append(t.getClass().getName())
+                 .append(": ").append(t.getMessage()).append('\n')
+            t = t.getCause()
+        }
+        __diagBuf.append(sb)
+    }
+}
+
+gradle.buildFinished { result ->
+    System.setOut(__diagOrigOut)
+    System.setErr(__diagOrigErr)
+    if (result.failure == null) { return }
+    def lines = __diagBuf.toString().readLines()
+    def errs = lines.findAll {
+        it.startsWith('e: ') || it.startsWith('FAILED_TASK=') || it.startsWith('CAUSE[') ||
+                it.contains(': error: ') || it.contains(' error: ')
+    }.unique()
+    __diagOrigOut.println("::error::DIAG_ERROR_LINE_COUNT=" + errs.size())
+    errs.take(45).each { line ->
+        def msg = line.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+        if (msg.length() > 380) { msg = msg.substring(0, 380) }
+        __diagOrigOut.println("::error::" + msg)
+    }
+    __diagOrigOut.flush()
+}
+// END TEMPORARY BUILD DIAGNOSTIC
+
 allprojects {
     repositories {
         maven { url 'https://jitpack.io' }
