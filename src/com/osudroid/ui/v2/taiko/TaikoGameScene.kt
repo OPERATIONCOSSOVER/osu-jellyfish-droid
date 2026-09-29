@@ -221,7 +221,9 @@ class TaikoGameScene private constructor(
 
     // --- Hit windows ---------------------------------------------------------------------------
 
-    private val hitWindow = TaikoHitWindow()
+    // Written with an explicit Double argument: `TaikoHitWindow()` is ambiguous because the class
+    // declares both a `Double?` primary constructor and a `Float?` secondary one, each defaulted.
+    private val hitWindow = TaikoHitWindow(5.0)
     private val greatWindow get() = hitWindow.greatWindow
     private val okWindow get() = hitWindow.okWindow
 
