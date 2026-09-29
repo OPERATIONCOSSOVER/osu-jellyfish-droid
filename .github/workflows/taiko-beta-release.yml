@@ -16,7 +16,7 @@ on:
       tag:
         description: "Release tag"
         required: true
-        default: "20260727-taiko-beta.12.9"
+        default: "20260727-taiko-beta.12.5"
       title:
         description: "Release title"
         required: true
@@ -75,63 +75,31 @@ jobs:
           fi
 
           cat > release-notes.md <<'EOF'
-          ## osu!jellyfish 20260727 Taiko Beta 12.9
+          ## osu!jellyfish Taiko Beta 12.5
 
-          The osu!taiko beta ruleset has been rebuilt against the osu!stable client's documented
-          behaviour, and its skin elements can now come from the running skin.
+          A follow-up to Beta 12 covering the custom intro theme and a round of Taiko work.
 
           ### Fixed
 
-          - **Hit windows were far too lenient above OD 5.** The scene recomputed them inline and
-            flattened the OK and MISS windows at OD 5, so an OD 10 map kept an 80 ms OK window
-            and a 95 ms miss window instead of stable's 50 ms and 70 ms. The windows now come
-            from `TaikoHitWindow`, which already had the correct bend-at-5 curve.
+          - **Picked .osz files silently falling back to the bundled theme.** The importer only
+            looked for audio at the very top level of the extracted .osz, so any .osz that wraps
+            its contents in a folder resolved to no audio at all and reset the setting. The
+            extracted files are now searched recursively, and import failures report why instead
+            of quietly reverting.
 
           ### Changed
 
-          - **Scoring is osu!stable's ScoreV1.** A hit is now worth
-            `ScoreValue + min(floor(Combo / 10), 10) * floor(n * mod multiplier)`, multiplied by
-            1.2 during kiai, where `ScoreValue` is 300 for a GREAT and 150 for a GOOD. The old
-            `300 + combo * 12` was not stable's formula.
-          - **Big notes need both colours.** A big note only pays double when both colours land
-            together. A single correct key still connects for the ordinary value, and the
-            opposite colour arriving within 45 ms upgrades the hit.
-          - **A wrong-colour tap is a miss.** Colour is what makes the mode work: without this,
-            every note could be cleared by mashing a single key.
-          - **Drum rolls are tick-capped.** Stable allows four collectable ticks per beat, or
-            eight on songs at 125 BPM or below, instead of following the map's slider tick rate.
-          - **Dendens pay a GREAT big note on completion** rather than a flat 600.
-          - **Health is scaled by the note count**, so a full combo fills the bar and a run only
-            passes at 50% or better, as in stable.
-          - **Combo milestones fire every 50 hits**, not every 25.
-          - **Kiai time** multiplies scoring hits by 1.2 and drives a glow behind the hit
-            position.
-
-          ### Look and feel
-
-          - The field is laid out the way stable lays it out: a thin lane high on the screen, a
-            drum larger than the lane hugging the left edge, and a judgement circle just past
-            the drum. The orange header and the placeholder drum panel are gone.
-          - The combo counter is drawn on the drum face, the way stable does.
-          - Note colours are stable's tints: don `(235, 69, 44)`, kat `(68, 141, 171)` and the
-            roll head `(252, 83, 6)`.
-
-          ### Skins
-
-          - osu!taiko skin elements are resolved from the running skin: `taiko-bar-left`,
-            `taiko-drum-inner`/`outer`, `taiko-slider`, `taiko-glow`,
-            `taikohitcircle`/`taikobigcircle` and their overlays, and the `taiko-hit300`/`100`/`0`
-            bursts. Every element falls back to the built-in drawn shapes when a skin provides
-            nothing, so skins without osu!taiko art are unaffected.
-
-          ### Known deviation
-
-          Stable misses a note when both colours are struck at once on a note that is not big.
-          This scene judges on the first tap to keep input latency-free, which makes that
-          indistinguishable from a fast alternating stream, so the penalty is not applied.
-
-          Beta limitations: standard-mode beatmaps are not converted to Taiko, and Taiko
-          multiplayer, online leaderboards, replay storage, and score uploads are disabled.
+          - **"Now playing" shows the intro.** While the intro is playing, the main menu names the
+            intro's own artist and title, read from the .osu inside the .osz, instead of an
+            unrelated beatmap picked out of your library.
+          - **The cookie beats to the intro.** The logo pulse and the kiai star bursts now follow
+            the intro's own timing points, so the beat matches what you are actually hearing.
+          - **The intro is only for opening the game.** It plays on the main menu at launch and
+            stops for good once you head into song select or multiplayer. Coming back to the menu
+            uses the beatmap you selected in song select, matching osu!stable.
+          - **Changing the theme takes effect on the next launch.** The intro's metadata and
+            timing are read once while the menu is being built, so picking or resetting a theme
+            now tells you to restart rather than swapping the audio out from under the menu.
           EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
