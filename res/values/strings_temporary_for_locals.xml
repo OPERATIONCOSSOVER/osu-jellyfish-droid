@@ -11,4 +11,7 @@
     <string name="opt_seasonal_backgrounds_interval_title">Slideshow interval</string>
     <string name="opt_seasonal_backgrounds_interval_summary">Seconds each image stays on screen before fading to the next</string>
 
+    <string name="opt_slider_border_follow_combo_color_title">Combo color slider borders</string>
+    <string name="opt_slider_border_follow_combo_color_summary">Tint each slider border with its combo color instead of the skin or beatmap border color</string>
+
 </resources>
