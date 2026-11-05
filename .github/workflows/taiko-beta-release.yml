@@ -56,6 +56,19 @@ jobs:
           cat build-errors.log >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
+      - name: Attach build log to branch on failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF: ${{ github.event.inputs.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f full-build.log build-errors.log
+          git commit -m "Add release build log for debugging" || true
+          git push origin "HEAD:refs/heads/$TARGET_REF"
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
