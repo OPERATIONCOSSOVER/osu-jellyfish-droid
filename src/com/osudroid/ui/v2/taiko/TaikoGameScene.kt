@@ -728,7 +728,7 @@ class TaikoGameScene private constructor(
                     y = laneY - laneTop - size / 2f
                     width = size
                     height = size
-                    color = color
+                    this.color = color
                     alpha = 0.55f
                 }
             }
@@ -765,8 +765,8 @@ class TaikoGameScene private constructor(
             flowerBurst = sprite {
                 x = -drumWidth * 0.1f
                 y = bottom - height * 0.7f
-                width = drumWidth * 1.4f
-                height = height * 0.7f
+                this.width = drumWidth * 1.4f
+                this.height = height * 0.7f
                 scaleType = ScaleType.Fit
                 textureRegion = flower
                 origin = Anchor.Center
@@ -1838,7 +1838,7 @@ class TaikoGameScene private constructor(
                     x = height / 2f
                     y = 0f
                     width = durationWidth
-                    height = height
+                    this.height = height
                     scaleType = ScaleType.Stretch
                     textureRegion = middleTexture
                     color = ROLL_IDLE_COLOR
@@ -1849,7 +1849,7 @@ class TaikoGameScene private constructor(
                     x = height / 2f
                     y = 0f
                     width = durationWidth
-                    height = height
+                    this.height = height
                     cornerRadius = height / 2f
                     color = ROLL_IDLE_COLOR
                     alpha = 0.9f
@@ -1861,7 +1861,7 @@ class TaikoGameScene private constructor(
                     x = durationWidth
                     y = 0f
                     width = height
-                    height = height
+                    this.height = height
                     scaleType = ScaleType.Stretch
                     textureRegion = endTexture
                     color = ROLL_IDLE_COLOR
@@ -1871,7 +1871,7 @@ class TaikoGameScene private constructor(
                     x = durationWidth
                     y = 0f
                     width = height
-                    height = height
+                    this.height = height
                     color = ROLL_IDLE_COLOR
                 }
             }
@@ -1881,7 +1881,7 @@ class TaikoGameScene private constructor(
                     x = 0f
                     y = 0f
                     width = height
-                    height = height
+                    this.height = height
                     scaleType = ScaleType.Fit
                     textureRegion = headTexture
                     color = ROLL_HEAD_COLOR
@@ -1891,7 +1891,7 @@ class TaikoGameScene private constructor(
                     x = 0f
                     y = 0f
                     width = height
-                    height = height
+                    this.height = height
                     color = ROLL_HEAD_COLOR
                 }
             }
@@ -1908,7 +1908,7 @@ class TaikoGameScene private constructor(
                         x = tickX - tickSize / 2f
                         y = (height - tickSize) / 2f
                         width = tickSize
-                        height = tickSize
+                        this.height = tickSize
                         scaleType = ScaleType.Fit
                         textureRegion = tickTexture
                         origin = Anchor.Center
@@ -1918,7 +1918,7 @@ class TaikoGameScene private constructor(
                         x = tickX - tickSize / 2f
                         y = (height - tickSize) / 2f
                         width = tickSize
-                        height = tickSize
+                        this.height = tickSize
                         color = Color4.White
                         alpha = 0.85f
                         origin = Anchor.Center
