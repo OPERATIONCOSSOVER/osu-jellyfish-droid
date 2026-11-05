@@ -25,6 +25,7 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: taiko-stable-release-${{ github.event.inputs.tag }}
@@ -57,7 +58,7 @@ jobs:
           cat build-errors.log >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
-      - name: Report build errors as an issue
+      - name: Report build errors on PR #47
         if: failure()
         shell: bash
         env:
@@ -72,16 +73,9 @@ jobs:
             echo '### Tail of full build log'
             tail -n 300 full-build.log 2>/dev/null || true
             echo '```'
-          } > issue-body.md
+          } > pr-comment.md
 
-          title="Release build log ($RELEASE_TAG)"
-          issue_number=$(gh issue list --search "in:title $title" --limit 1 --json number --jq '.[0].number // empty')
-
-          if [ -n "$issue_number" ]; then
-            gh issue comment "$issue_number" --body-file issue-body.md
-          else
-            gh issue create --title "$title" --body-file issue-body.md
-          fi
+          gh pr comment 47 --body-file pr-comment.md
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
