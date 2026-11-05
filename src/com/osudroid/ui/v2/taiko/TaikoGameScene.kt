@@ -55,6 +55,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.anddev.andengine.input.touch.TouchEvent
+import org.anddev.andengine.opengl.texture.region.TextureRegion
 import ru.nsu.ccfit.zuev.audio.Status
 import ru.nsu.ccfit.zuev.osu.Config
 import ru.nsu.ccfit.zuev.osu.GlobalManager
@@ -71,6 +72,7 @@ import java.util.concurrent.CompletableFuture
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.reflect.KClass
 
 /**
@@ -104,47 +106,37 @@ class TaikoGameScene private constructor(
     private val screenHeight = Config.getRES_HEIGHT().toFloat()
 
     /**
-     * osu!stable puts the taiko field in the upper part of the screen and leaves the lower part to
-     * the beatmap background. This scene keeps the full-screen background, but proportions the lane
-     * the way stable does: a band a little under a quarter of the screen tall sitting just above
-     * the middle, with the drum hugging the left edge.
+     * Stable authors its taiko art against a 768px-tall playfield and scales the whole field with
+     * the window. The bar starts at y=216, is 200px tall, the input drum is 180px wide and the
+     * judgement circle sits at x=256. Those are the proportions reproduced below.
      */
-    private val laneTop = screenHeight * 0.34f
-    private val laneHeight = screenHeight * 0.22f
+    private val playfieldScale = screenHeight / STABLE_REFERENCE_HEIGHT
+    private val laneTop = STABLE_PLAYFIELD_Y * playfieldScale
+    private val laneHeight = STABLE_PLAYFIELD_HEIGHT * playfieldScale
     private val laneBottom = laneTop + laneHeight
     private val laneY = laneTop + laneHeight / 2f
 
-    /**
-     * Stable's drum is noticeably larger than the lane it sits on, and notes are struck just past
-     * its right edge rather than on the drum itself.
-     */
-    private val drumDiameter = (laneHeight * 1.55f).coerceAtMost(screenHeight * 0.42f)
-    private val drumCenterX = screenWidth * 0.015f + drumDiameter / 2f
+    /** `taiko-bar-left` occupies the whole left edge of the bar and centres the drum face. */
+    private val drumWidth = STABLE_INPUT_DRUM_WIDTH * playfieldScale
+    private val drumCenterX = drumWidth / 2f
+    private val drumFaceDiameter = laneHeight * 0.62f
 
     /** Where notes have to be when they are hit. */
-    private val targetX = drumCenterX + drumDiameter / 2f + laneHeight * 0.22f
+    private val targetX = STABLE_HIT_TARGET_X * playfieldScale
 
-    private val spawnX = screenWidth + 80f
-    private val normalNoteDiameter = laneHeight * 0.62f
-    private val bigNoteDiameter = laneHeight * 0.92f
-    private val targetDiameter = laneHeight * 0.86f
-    private val judgementBaseY = laneBottom + 8f
+    private val normalNoteDiameter = laneHeight * STABLE_NORMAL_NOTE_SCALE
+    private val bigNoteDiameter = normalNoteDiameter * STABLE_STRONG_SCALE
+    private val spawnX = screenWidth + bigNoteDiameter
 
-    /** Diameter of the burst drawn on the hit position. */
+    /** Diameter of the approach circle / burst drawn on the hit position. */
+    private val targetDiameter = laneHeight * STABLE_APPROACH_SCALE
     private val burstDiameter = laneHeight * 1.05f
 
-    /**
-     * Size of a denden's centre circle. osu!lazer draws a swell as an ordinary taiko object that
-     * travels down the lane and parks on the hit target, so it is sized against the lane like any
-     * other note rather than against the screen.
-     */
-    private val swellDiameter = laneHeight * 0.62f
+    /** Stable's `spinner-circle` and the box that holds its shrinking approach ring. */
+    private val spinnerDiameter = laneHeight * 1.05f
+    private val swellBoxDiameter = laneHeight * 1.7f
 
-    /** The widest a denden's rings ever grow, which is what sizes its entity box. */
-    private val swellRingMaxDiameter = swellDiameter * SWELL_RING_MAX_SCALE
-
-    /** Height of a drum roll body, and therefore the diameter of its head. */
-    private val rollHeight = laneHeight * 0.42f
+    private val judgementBaseY = laneY - burstDiameter * 0.85f
 
     /** Distance a note travels from spawn to the judgement circle. */
     private val travelDistance = spawnX - targetX
@@ -156,10 +148,30 @@ class TaikoGameScene private constructor(
     private lateinit var healthBar: HUDHealthBar
     private lateinit var songProgress: HUDSongProgress
     private lateinit var skipButton: UIAnimatedSprite
-    private lateinit var inputFlash: UICircle
-    private lateinit var hitExplosion: UICircle
-    private lateinit var kiaiGlow: UICircle
+
+    /** Stable's `taiko-slider` tiles, scrolling left above the bar. */
+    private lateinit var scrollerLayer: UIContainer
+    private val scrollerTiles = mutableListOf<Triple<UIContainer, UIComponent, UIComponent>>()
+    private var scrollerTileWidth = 0f
+    private var scrollerOffset = 0f
+
+    /** `taiko-bar-right-glow`, crossfaded in during kiai time. */
+    private var barGlow: UISprite? = null
+
+    /** Stable flashes the corresponding half of the drum on every tap. */
+    private lateinit var donFlash: UIContainer
+    private lateinit var katFlash: UIContainer
+
+    /** `taiko-glow` / drawn sunburst behind the judgement circle. */
+    private lateinit var kiaiGlow: UIContainer
+
+    /** Combo milestone flower and the four pippidon states. */
     private lateinit var milestoneRing: UICircle
+    private var flowerBurst: UISprite? = null
+    private val mascotSprites = mutableMapOf<MascotState, UIAnimatedSprite>()
+    private var mascotState = MascotState.Idle
+    private var mascotStateTimeRemaining = 0f
+
     private lateinit var comboText: UIText
     private lateinit var songIntro: UIContainer
     private val judgementText: UIText
@@ -274,10 +286,15 @@ class TaikoGameScene private constructor(
     // --- Presentation --------------------------------------------------------------------------
 
     private var judgementTimeRemaining = 0f
-    private var inputFlashTimeRemaining = 0f
-    private var explosionTimeRemaining = 0f
-    private var explosionBaseDiameter = 0f
+    private var donFlashTimeRemaining = 0f
+    private var katFlashTimeRemaining = 0f
     private var milestoneTimeRemaining = 0f
+    private var kiaiGlowAlpha = 0f
+    private var kiaiPulseTimeRemaining = 0f
+    private var barGlowAlpha = 0f
+    private var scrollerPassing = 1f
+    private var isPassing = true
+    private var kiaiFlashAlpha = 0f
 
     // --- Lifecycle -----------------------------------------------------------------------------
 
@@ -316,6 +333,7 @@ class TaikoGameScene private constructor(
             alpha = (1f - Config.getBackgroundBrightness()).coerceIn(0f, 1f)
         }
 
+        buildScroller()
         buildLane()
         buildDrum()
         buildHitTarget()
@@ -323,15 +341,14 @@ class TaikoGameScene private constructor(
         attachChild(playfield)
 
         judgementText = text {
-            x = targetX - 95f
+            x = targetX - burstDiameter
             y = judgementBaseY
-            width = 190f
+            width = burstDiameter * 2f
             alignment = Anchor.TopCenter
             font = resources.getFont("middleFont")
             text = ""
         }
 
-        buildSongInfoBar()
         createTaikoHud()
         buildSkipButton()
         buildSongIntro()
@@ -342,24 +359,125 @@ class TaikoGameScene private constructor(
     }
 
     /**
-     * The scrolling band the notes travel along.
-     *
-     * osu!stable skins this with `taiko-slider`, a long tiled strip. When a skin provides one it is
-     * stretched across the band; otherwise the band is drawn as the two-tone dark strip stable's
-     * default art produces.
+     * The upper half of stable's playfield: `taiko-slider` scrolling left in a seamless loop, with
+     * `taiko-slider-fail` taking over for 200ms after a miss. Both are optional; without them a
+     * warm star field is drawn so the top of the screen still reads as stable's playfield.
+     */
+    private fun buildScroller() {
+        val passingTexture = TaikoSkin[TaikoSkinNames.SLIDER]
+        val failingTexture = TaikoSkin[TaikoSkinNames.SLIDER_FAIL] ?: passingTexture
+
+        scrollerTileWidth = if (passingTexture != null && passingTexture.height > 0) {
+            max(
+                laneTop * 0.5f,
+                passingTexture.width.toFloat() / passingTexture.height.toFloat() * laneTop
+            )
+        } else {
+            laneTop * 1.5f
+        }
+
+        scrollerLayer = UIContainer().apply {
+            x = 0f
+            y = 0f
+            width = screenWidth
+            height = laneTop
+            clipToBounds = true
+        }
+        attachChild(scrollerLayer)
+
+        val tileCount = (screenWidth / scrollerTileWidth).toInt() + 3
+        for (index in 0 until tileCount) {
+            val tile = UIContainer().apply {
+                x = index * scrollerTileWidth
+                y = 0f
+                width = scrollerTileWidth
+                height = laneTop
+            }
+
+            val passing = createScrollerFace(passingTexture, false)
+            val failing = createScrollerFace(failingTexture, true)
+
+            tile.attachChild(passing)
+            tile.attachChild(failing)
+            scrollerLayer.attachChild(tile)
+            scrollerTiles.add(Triple(tile, passing, failing))
+        }
+    }
+
+    /** One layer of a scrolling tile. Stable crossfades the passing and failing variants. */
+    private fun createScrollerFace(texture: TextureRegion?, isFail: Boolean): UIComponent {
+        if (texture != null) {
+            return UISprite(texture).apply {
+                width = scrollerTileWidth
+                height = laneTop
+                scaleType = ScaleType.Stretch
+                if (isFail && TaikoSkin[TaikoSkinNames.SLIDER_FAIL] == null) {
+                    color = Color4(0xFF8A4A55)
+                }
+                alpha = if (isFail) 0f else 1f
+            }
+        }
+
+        val base = if (isFail) TAIKO_SCROLLER_FAIL_COLOR else TAIKO_SCROLLER_COLOR
+        val wave = if (isFail) Color4(0xFF6B3C46) else TAIKO_SCROLLER_WAVE_COLOR
+
+        return UIContainer().apply {
+            width = scrollerTileWidth
+            height = laneTop
+            alpha = if (isFail) 0f else 1f
+
+            box {
+                x = 0f
+                y = 0f
+                width = scrollerTileWidth
+                height = laneTop
+                color = base
+            }
+
+            // A soft wave band, the closest drawn approximation of stable's default scroller art.
+            box {
+                x = -scrollerTileWidth * 0.15f
+                y = laneTop * 0.22f
+                width = scrollerTileWidth * 1.3f
+                height = laneTop * 0.55f
+                cornerRadius = laneTop * 0.26f
+                color = wave
+                alpha = 0.65f
+            }
+
+            for (index in 0 until 12) {
+                val size = laneTop * (0.045f + (index % 3) * 0.022f)
+                val px = (index * 0.137f + (index % 3) * 0.07f) % 1f * (scrollerTileWidth - size)
+                val py = (index * 0.211f + (index % 4) * 0.05f) % 1f * (laneTop - size)
+
+                circle {
+                    x = px
+                    y = py
+                    width = size
+                    height = size
+                    color = Color4.White
+                    alpha = 0.8f
+                }
+            }
+        }
+    }
+
+    /**
+     * The lower half of stable's playfield: `taiko-bar-right` with `taiko-bar-right-glow` overlaid
+     * during kiai. Notes are drawn on top of this strip; the beatmap background stays visible below.
      */
     private fun buildLane() {
-        val sliderTexture = TaikoSkin[TaikoSkinNames.SLIDER]
+        val barTexture = TaikoSkin[TaikoSkinNames.BAR_RIGHT]
+        val glowTexture = TaikoSkin[TaikoSkinNames.BAR_RIGHT_GLOW]
 
-        if (sliderTexture != null) {
+        if (barTexture != null) {
             sprite {
                 x = 0f
                 y = laneTop
                 width = FillParent
                 height = laneHeight
-                scaleType = ScaleType.Crop
-                textureRegion = sliderTexture
-                alpha = 0.95f
+                scaleType = ScaleType.Stretch
+                textureRegion = barTexture
             }
         } else {
             box {
@@ -367,8 +485,8 @@ class TaikoGameScene private constructor(
                 y = laneTop
                 width = FillParent
                 height = laneHeight
-                color = Color4(0xFF14141B)
-                alpha = 0.94f
+                color = TAIKO_BAR_COLOR
+                alpha = 0.96f
             }
 
             // Stable's bar is lighter along the top and drops into shadow at the bottom.
@@ -376,243 +494,365 @@ class TaikoGameScene private constructor(
                 x = 0f
                 y = laneTop
                 width = FillParent
-                height = laneHeight * 0.45f
-                color = Color4(0xFF26262F)
+                height = laneHeight * 0.42f
+                color = TAIKO_BAR_TOP_COLOR
                 alpha = 0.85f
             }
         }
+
+        barGlow = if (glowTexture != null) {
+            sprite {
+                x = 0f
+                y = laneTop
+                width = FillParent
+                height = laneHeight
+                scaleType = ScaleType.Stretch
+                textureRegion = glowTexture
+                alpha = 0f
+            }
+        } else {
+            null
+        }
+
+        buildKiaiGlow()
 
         box {
             x = 0f
             y = laneTop
             width = FillParent
-            height = 3f
+            height = 2.5f * playfieldScale
             color = Color4(0xFF4A4A57)
             alpha = 0.9f
         }
 
         box {
             x = 0f
-            y = laneBottom - 3f
+            y = laneBottom - 2.5f * playfieldScale
             width = FillParent
-            height = 3f
+            height = 2.5f * playfieldScale
             color = Color4(0xFF050507)
             alpha = 0.9f
         }
     }
 
     /**
+     * `taiko-glow` lives behind the judgement circle, not behind the drum. In kiai it fades in over
+     * 100ms, out over 600ms and expands briefly on every hit.
+     */
+    private fun buildKiaiGlow() {
+        val texture = TaikoSkin[TaikoSkinNames.GLOW]
+        val size = laneHeight * 1.25f
+        val rayThickness = laneHeight * 0.035f
+
+        kiaiGlow = UIContainer().apply {
+            x = targetX - size / 2f
+            y = laneY - size / 2f
+            width = size
+            height = size
+            origin = Anchor.Center
+            alpha = 0f
+
+            if (texture != null) {
+                sprite {
+                    x = 0f
+                    y = 0f
+                    width = size
+                    height = size
+                    scaleType = ScaleType.Fit
+                    textureRegion = texture
+                    color = KIAI_GLOW_COLOR
+                }
+            } else {
+                // Drawn sunburst, matching the star-burst glow of stable's default skin.
+                for (index in 0 until 12) {
+                    box {
+                        x = 0f
+                        y = (size - rayThickness) / 2f
+                        width = size
+                        height = rayThickness
+                        origin = Anchor.Center
+                        rotation = index * 30f
+                        color = KIAI_GLOW_COLOR
+                        alpha = 0.65f
+                    }
+                }
+
+                val centreSize = size * 0.36f
+                circle {
+                    x = (size - centreSize) / 2f
+                    y = (size - centreSize) / 2f
+                    width = centreSize
+                    height = centreSize
+                    color = KIAI_GLOW_COLOR
+                    alpha = 0.45f
+                }
+            }
+        }
+        attachChild(kiaiGlow)
+    }
+
+    /**
      * The drum on the far left.
      *
-     * osu!stable draws the combo counter on the drum face, which is what makes the number readable
-     * without taking attention away from the lane. The drum is decorative here — the playable
-     * controls stay invisible and span the whole screen.
+     * Stable draws `taiko-bar-left`, splits the drum into mirrored inner/outer halves that flash
+     * when tapped, and puts the combo counter on the drum face. The playable controls stay
+     * invisible and span the whole screen.
      */
     private fun buildDrum() {
         val panel = TaikoSkin[TaikoSkinNames.BAR_LEFT]
         val outer = TaikoSkin[TaikoSkinNames.DRUM_OUTER]
         val inner = TaikoSkin[TaikoSkinNames.DRUM_INNER]
 
-        // Kiai glow sits behind the drum, expanding on every hit the way stable's `taiko-glow` does.
-        kiaiGlow = circle {
-            val size = drumDiameter * 1.25f
-            x = drumCenterX - size / 2f
-            y = laneY - size / 2f
-            width = size
-            height = size
-            color = Color4(0xFFFFD54F)
-            alpha = 0f
-        }
-        attachChild(kiaiGlow)
-
-        val drumContainer = UIContainer()
-        attachChild(drumContainer)
-
         if (panel != null) {
-            val aspect = panel.height.toFloat() / panel.width.toFloat().coerceAtLeast(1f)
-            val panelHeight = drumDiameter * aspect
-
-            drumContainer.sprite {
+            sprite {
                 x = 0f
-                y = laneY - panelHeight / 2f
-                width = drumDiameter
-                height = panelHeight
-                scaleType = ScaleType.Fit
+                y = laneTop
+                width = drumWidth
+                height = laneHeight
+                scaleType = ScaleType.Stretch
                 textureRegion = panel
             }
-        }
-
-        if (outer != null) {
-            drumContainer.sprite {
-                x = drumCenterX - drumDiameter / 2f
-                y = laneY - drumDiameter / 2f
-                width = drumDiameter
-                height = drumDiameter
-                scaleType = ScaleType.Fit
-                textureRegion = outer
-            }
         } else {
-            // Drawn fallback: the red shell of a taiko drum.
-            drumContainer.circle {
-                x = drumCenterX - drumDiameter / 2f
-                y = laneY - drumDiameter / 2f
-                width = drumDiameter
-                height = drumDiameter
-                color = Color4(0xFFD6404A)
-            }
-
-            drumContainer.circle {
-                val inset = drumDiameter * 0.055f
-                x = drumCenterX - drumDiameter / 2f + inset
-                y = laneY - drumDiameter / 2f + inset
-                width = drumDiameter - inset * 2f
-                height = drumDiameter - inset * 2f
-                color = Color4(0xFFFFF3DC)
-            }
-
-            drumContainer.circle {
-                val inset = drumDiameter * 0.14f
-                x = drumCenterX - drumDiameter / 2f + inset
-                y = laneY - drumDiameter / 2f + inset
-                width = drumDiameter - inset * 2f
-                height = drumDiameter - inset * 2f
-                color = Color4(0xFF9C5A5F)
-                alpha = 0.28f
-                paintStyle = PaintStyle.Outline
-                lineWidth = 3f
+            box {
+                x = 0f
+                y = laneTop
+                width = drumWidth
+                height = laneHeight
+                color = TAIKO_PANEL_COLOR
             }
         }
 
-        if (inner != null) {
-            drumContainer.sprite {
-                val size = drumDiameter * 0.62f
-                x = drumCenterX - size / 2f
-                y = laneY - size / 2f
-                width = size
-                height = size
-                scaleType = ScaleType.Fit
-                textureRegion = inner
-            }
+        // Drawn fallback for the drum face: a cream centre inside a red/blue rim.
+        val faceSize = drumFaceDiameter
+        circle {
+            x = drumCenterX - faceSize / 2f
+            y = laneY - faceSize / 2f
+            width = faceSize
+            height = faceSize
+            color = Color4(0xFFFFF3DC)
+        }
+        circle {
+            x = drumCenterX - faceSize / 2f
+            y = laneY - faceSize / 2f
+            width = faceSize
+            height = faceSize
+            color = DON_COLOR
+            alpha = 0.85f
+            paintStyle = PaintStyle.Outline
+            lineWidth = faceSize * 0.075f
+        }
+        circle {
+            val centreSize = faceSize * 0.46f
+            x = drumCenterX - centreSize / 2f
+            y = laneY - centreSize / 2f
+            width = centreSize
+            height = centreSize
+            color = Color4(0xFFF8E1E1)
+            alpha = 0.9f
         }
 
-        comboText = drumContainer.text {
-            x = drumCenterX - 90f
+        donFlash = buildDrumFlash(inner, DON_COLOR, true)
+        katFlash = buildDrumFlash(outer, KAT_COLOR, false)
+        attachChild(donFlash)
+        attachChild(katFlash)
+
+        comboText = text {
+            x = 0f
             y = laneY - 26f
-            width = 180f
+            width = drumWidth
             alignment = Anchor.TopCenter
             font = resources.getFont("strokeFont")
             text = ""
         }
 
-        // Combo milestones every 50 hits, drawn as a ring pulsing out of the drum.
+        // Combo milestones every 50 hits: a flower/ring pulsing out behind the mascot.
         milestoneRing = circle {
-            x = drumCenterX - drumDiameter / 2f
-            y = laneY - drumDiameter / 2f
-            width = drumDiameter
-            height = drumDiameter
+            val size = laneHeight * 0.9f
+            x = drumCenterX - size / 2f
+            y = laneTop + laneHeight * 0.2f - size
+            width = size
+            height = size
             color = Color4(0xFFFFF176)
             alpha = 0f
             paintStyle = PaintStyle.Outline
             lineWidth = 6f
         }
-        attachChild(milestoneRing)
 
-        // Header text, kept out of the way of the lane.
-        text {
-            x = 18f
-            y = 18f
-            font = resources.getFont("smallFont")
-            color = Color4.White
-            alpha = 0.75f
-            text = if (isAutoPlay) "Watching osu!taiko (BETA)" else "osu!taiko (BETA)"
+        buildMascot()
+
+    }
+
+    /**
+     * One of the two mirrored half-drum highlights stable fades in on a tap. Skins provide a half
+     * drum image; the fallback is a coloured circle over the drum face.
+     */
+    private fun buildDrumFlash(texture: TextureRegion?, color: Color4, isCentre: Boolean): UIContainer =
+        UIContainer().apply {
+            x = 0f
+            y = laneTop
+            width = drumWidth
+            height = laneHeight
+            alpha = 0f
+
+            if (texture != null) {
+                val half = drumWidth / 2f
+
+                // `flippedHorizontal` mutates the TextureRegion itself, so the mirrored half gets
+                // its own copy. Otherwise the shared drum texture would be flipped for every other
+                // sprite using it too.
+                val mirrored = texture.deepCopy()
+
+                sprite {
+                    x = 0f
+                    y = 0f
+                    width = half
+                    height = laneHeight
+                    scaleType = ScaleType.Stretch
+                    textureRegion = texture
+                }
+
+                sprite {
+                    x = half
+                    y = 0f
+                    width = half
+                    height = laneHeight
+                    scaleType = ScaleType.Stretch
+                    textureRegion = mirrored
+                    flippedHorizontal = true
+                }
+            } else {
+                val size = drumFaceDiameter * if (isCentre) 0.62f else 1f
+
+                circle {
+                    x = drumCenterX - size / 2f
+                    y = laneY - laneTop - size / 2f
+                    width = size
+                    height = size
+                    color = color
+                    alpha = 0.55f
+                }
+            }
+        }
+
+    /** Pippidon idle / kiai / fail / clear animations, positioned above the drum. */
+    private fun buildMascot() {
+        val height = laneHeight * 0.95f
+        val width = drumWidth * 1.2f
+        val bottom = laneTop + laneHeight * 0.2f
+
+        for (state in MascotState.values()) {
+            val frames = TaikoSkin.pippidonFrames(state)
+            if (frames.isEmpty()) {
+                continue
+            }
+
+            val sprite = UIAnimatedSprite(frames.map { it as TextureRegion? }.toTypedArray()).apply {
+                x = 0f
+                y = bottom - height
+                this.width = width
+                this.height = height
+                scaleType = ScaleType.Fit
+                frameTime = 0.12f
+                isVisible = state == MascotState.Idle
+            }
+
+            mascotSprites[state] = sprite
+            attachChild(sprite)
+        }
+
+        val flower = TaikoSkin.flower()
+        if (flower != null) {
+            flowerBurst = sprite {
+                x = -drumWidth * 0.1f
+                y = bottom - height * 0.7f
+                width = drumWidth * 1.4f
+                height = height * 0.7f
+                scaleType = ScaleType.Fit
+                textureRegion = flower
+                origin = Anchor.Center
+                isVisible = false
+                alpha = 0f
+            }
         }
     }
 
     /**
      * The judgement circle the notes are struck on.
      *
-     * Stable skins this with `approachcircle`, the same element osu!standard uses for its approach
-     * circles, and draws it as a border on the hit position.
+     * Stable overlays `approachcircle` (alpha 0.47, scale 0.83) and `taikobigcircle` (alpha 0.22,
+     * scale 0.8). Without those skins it draws a thin double ring and the two vertical bar guides.
      */
     private fun buildHitTarget() {
         val approachCircle = TaikoSkin[TaikoSkinNames.APPROACH_CIRCLE]
+        val bigCircle = TaikoSkin[TaikoSkinNames.BIG_CIRCLE]
 
-        if (approachCircle != null) {
+        if (approachCircle != null && bigCircle != null) {
+            val approachSize = laneHeight * STABLE_APPROACH_SCALE
             sprite {
-                x = targetX - targetDiameter / 2f
-                y = laneY - targetDiameter / 2f
-                width = targetDiameter
-                height = targetDiameter
+                x = targetX - approachSize / 2f
+                y = laneY - approachSize / 2f
+                width = approachSize
+                height = approachSize
                 scaleType = ScaleType.Fit
                 textureRegion = approachCircle
-                alpha = 0.9f
+                alpha = STABLE_APPROACH_ALPHA
+            }
+
+            val bigSize = laneHeight * STABLE_BIG_TARGET_SCALE
+            sprite {
+                x = targetX - bigSize / 2f
+                y = laneY - bigSize / 2f
+                width = bigSize
+                height = bigSize
+                scaleType = ScaleType.Fit
+                textureRegion = bigCircle
+                alpha = STABLE_BIG_TARGET_ALPHA
             }
         } else {
+            val lineWidth = 2.5f * playfieldScale
+
             circle {
-                x = targetX - targetDiameter / 2f
-                y = laneY - targetDiameter / 2f
-                width = targetDiameter
-                height = targetDiameter
-                color = Color4(0xFFFFFFFF)
-                alpha = 0.34f
+                x = targetX - bigNoteDiameter / 2f
+                y = laneY - bigNoteDiameter / 2f
+                width = bigNoteDiameter
+                height = bigNoteDiameter
+                color = Color4.White
+                alpha = 0.1f
                 paintStyle = PaintStyle.Outline
-                lineWidth = 9f
+                this.lineWidth = lineWidth
             }
 
             circle {
-                val inner = targetDiameter * 0.74f
-                x = targetX - inner / 2f
-                y = laneY - inner / 2f
-                width = inner
-                height = inner
-                color = Color4(0xFFFFFFFF)
-                alpha = 0.8f
+                x = targetX - normalNoteDiameter / 2f
+                y = laneY - normalNoteDiameter / 2f
+                width = normalNoteDiameter
+                height = normalNoteDiameter
+                color = Color4.White
+                alpha = 0.5f
                 paintStyle = PaintStyle.Outline
-                lineWidth = 4f
+                this.lineWidth = lineWidth
             }
-        }
 
-        inputFlash = circle {
-            val size = targetDiameter * 0.92f
-            x = targetX - size / 2f
-            y = laneY - size / 2f
-            width = size
-            height = size
-            color = DON_COLOR
-            alpha = 0f
-        }
+            val guideHeight = (laneHeight - bigNoteDiameter) / 2f
+            val guideWidth = lineWidth
 
-        // Hit explosion. Unlike the note itself this stays pinned to the judgement circle,
-        // matching stable osu!taiko where the burst never drifts with the note.
-        hitExplosion = circle {
-            x = targetX - normalNoteDiameter / 2f
-            y = laneY - normalNoteDiameter / 2f
-            width = normalNoteDiameter
-            height = normalNoteDiameter
-            color = DON_COLOR
-            alpha = 0f
-            paintStyle = PaintStyle.Outline
-            lineWidth = 6f
-        }
-    }
+            box {
+                x = targetX - guideWidth / 2f
+                y = laneTop
+                width = guideWidth
+                height = guideHeight
+                color = Color4.White
+                alpha = 0.1f
+            }
 
-    private fun buildSongInfoBar() {
-        box {
-            x = 0f
-            y = laneBottom
-            width = FillParent
-            height = 40f
-            color = Color4.Black
-            alpha = 0.72f
-        }
-
-        text {
-            x = 18f
-            y = laneBottom + 9f
-            width = screenWidth - 36f
-            alignment = Anchor.TopRight
-            font = resources.getFont("smallFont")
-            text = "${beatmapInfo.artistText} - ${beatmapInfo.titleText} [${beatmapInfo.version}]"
+            box {
+                x = targetX - guideWidth / 2f
+                y = laneBottom - guideHeight
+                width = guideWidth
+                height = guideHeight
+                color = Color4.White
+                alpha = 0.1f
+            }
         }
     }
 
@@ -851,14 +1091,18 @@ class TaikoGameScene private constructor(
         val timingPoint = controlPoints.timing.controlPointAt(startTime)
         val difficultyPoint = controlPoints.difficulty.controlPointAt(startTime)
 
-        // osu!taiko scrolls 175 pixels per beat per unit of slider velocity, referenced against
-        // an 800px wide playfield. The common SV 1.4 therefore gives the familiar 245 px/beat.
-        val pxPerBeat = TAIKO_SCROLL_PX_PER_BEAT *
-            difficulty.sliderMultiplier *
-            difficultyPoint.speedMultiplier *
-            (screenWidth / REFERENCE_PLAYFIELD_WIDTH)
+        // Stable moves notes 0.1px/ms in its 480px gamefield at base velocity. Taiko then applies
+        // an extra 1.4 multiplier on top of the beatmap's slider multiplier and the inherited
+        // slider velocity, so notes read at the same pace as they do on the desktop client.
+        val baseVelocity = STABLE_BASE_SCROLL_PX_PER_MS *
+            (screenHeight / STABLE_GAMEFIELD_HEIGHT).toDouble()
 
-        val velocity = (pxPerBeat / timingPoint.msPerBeat).coerceAtLeast(0.01)
+        val effectiveVelocity = baseVelocity *
+            difficulty.sliderMultiplier *
+            STABLE_TAIKO_VELOCITY_MULTIPLIER *
+            difficultyPoint.speedMultiplier
+
+        val velocity = effectiveVelocity.coerceAtLeast(0.01)
 
         val obj = TaikoObject(
             kind,
@@ -983,6 +1227,8 @@ class TaikoGameScene private constructor(
             val now = if (songHasStarted) songService.positionPrecise else -leadInRemaining
 
             processObjects(now)
+            updatePlayfieldVisuals(deltaTimeSec, now)
+            updateNotePresentation(now)
             updateHud(now, deltaTimeSec)
             updateSkipButton(now)
 
@@ -1022,59 +1268,238 @@ class TaikoGameScene private constructor(
             }
         }
 
-        if (inputFlashTimeRemaining > 0f) {
-            inputFlashTimeRemaining -= deltaTimeSec
-            inputFlash.alpha = (inputFlashTimeRemaining / INPUT_FLASH_DURATION).coerceIn(0f, 0.62f)
-        } else {
-            inputFlash.alpha = 0f
-        }
+        // Stable's drum halves: fade in 80ms, hold 100ms, fade out 50ms.
+        donFlashTimeRemaining = (donFlashTimeRemaining - deltaTimeSec).coerceAtLeast(0f)
+        katFlashTimeRemaining = (katFlashTimeRemaining - deltaTimeSec).coerceAtLeast(0f)
+        donFlash.alpha = drumFlashAlpha(donFlashTimeRemaining)
+        katFlash.alpha = drumFlashAlpha(katFlashTimeRemaining)
 
-        // The explosion expands from the judgement circle and stays centred on it.
-        if (explosionTimeRemaining > 0f) {
-            explosionTimeRemaining -= deltaTimeSec
-
-            val progress = 1f - (explosionTimeRemaining / EXPLOSION_DURATION).coerceIn(0f, 1f)
-            val diameter = explosionBaseDiameter * (1f + EXPLOSION_GROWTH * progress)
-
-            hitExplosion.width = diameter
-            hitExplosion.height = diameter
-            hitExplosion.x = targetX - diameter / 2f
-            hitExplosion.y = laneY - diameter / 2f
-            hitExplosion.alpha = (EXPLOSION_ALPHA * (1f - progress)).coerceIn(0f, 1f)
-        } else {
-            hitExplosion.alpha = 0f
-        }
-
-        // Combo milestone ring, pulsing out of the drum.
+        // Combo milestone flower / ring, pulsing out behind the mascot.
         if (milestoneTimeRemaining > 0f) {
             milestoneTimeRemaining -= deltaTimeSec
 
             val progress =
                 1f - (milestoneTimeRemaining / COMBO_MILESTONE_DURATION).coerceIn(0f, 1f)
-            val diameter = drumDiameter * (1f + 0.55f * progress)
+            val diameter = laneHeight * (0.6f + 0.8f * progress)
+            val centreY = laneTop + laneHeight * 0.2f - laneHeight * 0.45f
 
             milestoneRing.width = diameter
             milestoneRing.height = diameter
             milestoneRing.x = drumCenterX - diameter / 2f
-            milestoneRing.y = laneY - diameter / 2f
+            milestoneRing.y = centreY - diameter / 2f
             milestoneRing.alpha = (0.9f * (1f - progress)).coerceIn(0f, 1f)
+
+            flowerBurst?.let { flower ->
+                flower.isVisible = true
+                flower.setScale(0.6f + 0.8f * progress)
+                flower.alpha = (0.85f * (1f - progress)).coerceIn(0f, 1f)
+            }
         } else {
             milestoneRing.alpha = 0f
-        }
-
-        // Kiai glow. Stable shows it behind the hit position and expands it on every hit.
-        if (isReady && !isFinished && isKiaiAt(currentTime)) {
-            kiaiGlow.alpha = (0.16f + inputFlash.alpha * 0.35f).coerceIn(0f, 0.5f)
-        } else {
-            kiaiGlow.alpha = 0f
+            flowerBurst?.isVisible = false
         }
 
         comboText.text = if (combo > 0) combo.toString() else ""
     }
 
+    /** Alpha of one of stable's half-drum flashes at the current point in its 230ms lifetime. */
+    private fun drumFlashAlpha(remaining: Float): Float {
+        if (remaining <= 0f) {
+            return 0f
+        }
+
+        val elapsed = DRUM_FLASH_DURATION - remaining
+
+        return when {
+            elapsed < DRUM_FLASH_IN -> elapsed / DRUM_FLASH_IN
+            elapsed < DRUM_FLASH_IN + DRUM_FLASH_HOLD -> 1f
+            else -> (1f - (elapsed - DRUM_FLASH_IN - DRUM_FLASH_HOLD) / DRUM_FLASH_OUT)
+                .coerceIn(0f, 1f)
+        }
+    }
+
+    /**
+     * Drives everything stable animates on the playfield itself: the scroller, the kiai bar, the
+     * glow behind the judgement circle, the mascot and the beat-synced note flash.
+     */
+    private fun updatePlayfieldVisuals(deltaTimeSec: Float, now: Double) {
+        // `taiko-slider` scrolls left at 0.1px/ms in stable's 768px reference space.
+        scrollerOffset -= STABLE_SCROLLER_PX_PER_MS * playfieldScale * deltaTimeSec * 1000f
+        if (scrollerTileWidth > 0f) {
+            scrollerOffset %= scrollerTileWidth
+            if (scrollerOffset > 0f) {
+                scrollerOffset -= scrollerTileWidth
+            }
+
+            val passingTarget = if (isPassing) 1f else 0f
+            val passingStep = deltaTimeSec / SCROLLER_FAIL_FADE
+            scrollerPassing = if (scrollerPassing < passingTarget) {
+                min(passingTarget, scrollerPassing + passingStep)
+            } else {
+                max(passingTarget, scrollerPassing - passingStep)
+            }
+
+            scrollerTiles.forEachIndexed { index, triple ->
+                triple.first.x = index * scrollerTileWidth + scrollerOffset
+                triple.second.alpha = scrollerPassing
+                triple.third.alpha = 1f - scrollerPassing
+            }
+        }
+
+        val isKiai = isReady && !isFinished && isKiaiAt(now)
+
+        // `taiko-bar-right-glow` crossfades over 200ms.
+        val barTarget = if (isKiai) 1f else 0f
+        val barStep = deltaTimeSec / BAR_GLOW_FADE
+        barGlowAlpha = if (barGlowAlpha < barTarget) {
+            min(barTarget, barGlowAlpha + barStep)
+        } else {
+            max(barTarget, barGlowAlpha - barStep)
+        }
+        barGlow?.alpha = barGlowAlpha
+
+        // `taiko-glow`: 100ms in, 600ms out, with an 80ms pulse on every hit.
+        val glowTarget = if (isKiai) 1f else 0f
+        val glowStep = deltaTimeSec / if (isKiai) KIAI_GLOW_FADE_IN else KIAI_GLOW_FADE_OUT
+        kiaiGlowAlpha = if (kiaiGlowAlpha < glowTarget) {
+            min(glowTarget, kiaiGlowAlpha + glowStep)
+        } else {
+            max(glowTarget, kiaiGlowAlpha - glowStep)
+        }
+
+        var glowScale = 1f
+        if (kiaiPulseTimeRemaining > 0f) {
+            kiaiPulseTimeRemaining = (kiaiPulseTimeRemaining - deltaTimeSec).coerceAtLeast(0f)
+            val pulse = (kiaiPulseTimeRemaining / KIAI_GLOW_PULSE).coerceIn(0f, 1f)
+            glowScale = 1f + (KIAI_GLOW_PULSE_SCALE - 1f) * pulse
+        }
+        kiaiGlow.alpha = kiaiGlowAlpha
+        kiaiGlow.setScale(glowScale)
+
+        // Pippidon returns to idle/kiai once its fail or clear animation has played once.
+        if (mascotStateTimeRemaining > 0f) {
+            mascotStateTimeRemaining -= deltaTimeSec
+            if (mascotStateTimeRemaining <= 0f) {
+                mascotState = if (isKiai) MascotState.Kiai else MascotState.Idle
+            }
+        } else if (mascotState == MascotState.Clear || mascotState == MascotState.Fail) {
+            mascotState = if (isKiai) MascotState.Kiai else MascotState.Idle
+        } else {
+            mascotState = if (isKiai) MascotState.Kiai else MascotState.Idle
+        }
+        updateMascot(now)
+
+        // Kiai note flash: 0.3 alpha on the beat, decaying over max(80ms, beat length - 80ms).
+        val timing = controlPoints?.timing?.controlPointAt(now)
+        val beatLength = (timing?.msPerBeat ?: 500.0).coerceAtLeast(1.0)
+        val phase = if (timing != null) {
+            ((now - timing.time) % beatLength + beatLength) % beatLength
+        } else {
+            0.0
+        }
+        val flashDuration = max(KIAI_FLASH_MIN_DURATION, beatLength - KIAI_FLASH_MIN_DURATION)
+        kiaiFlashAlpha = if (isKiai && phase <= flashDuration) {
+            KIAI_FLASH_ALPHA * (1f - (phase / flashDuration).toFloat())
+        } else {
+            0f
+        }
+    }
+
+    /** Shows one pippidon animation and keeps its frame rate tied to the current BPM. */
+    private fun updateMascot(now: Double) {
+        val beatLength = (controlPoints?.timing?.controlPointAt(now)?.msPerBeat ?: 500.0)
+            .coerceAtLeast(1.0)
+        val frameTime = (beatLength / 1000.0 / 4.0).toFloat().coerceIn(0.04f, 0.2f)
+
+        for ((state, sprite) in mascotSprites) {
+            if (state == mascotState) {
+                sprite.isVisible = true
+                sprite.frameTime = frameTime
+                if (!sprite.isPlaying) {
+                    sprite.play()
+                }
+            } else {
+                sprite.isVisible = false
+                sprite.stop()
+            }
+        }
+    }
+
+    /** Plays one of stable's one-shot mascot states for [duration] seconds. */
+    private fun setMascotState(state: MascotState, duration: Float) {
+        val sprite = mascotSprites[state] ?: return
+        mascotState = state
+        mascotStateTimeRemaining = duration
+
+        // Restart the one-shot animation without Entity.reset(): that would also zero the sprite's
+        // position, scale and visibility, which are owned by the playfield layout.
+        sprite.stop()
+        sprite.play()
+    }
+
+    /** Flashes the drum half that was tapped, the way stable does. */
+    private fun flashDrum(isKat: Boolean) {
+        if (isKat) {
+            katFlashTimeRemaining = DRUM_FLASH_DURATION
+        } else {
+            donFlashTimeRemaining = DRUM_FLASH_DURATION
+        }
+    }
+
+    /** Pulses `taiko-glow` when a note is hit during kiai time. */
+    private fun pulseKiaiGlow(now: Double) {
+        if (isKiaiAt(now)) {
+            kiaiPulseTimeRemaining = KIAI_GLOW_PULSE
+        }
+    }
+
+    /**
+     * Stable alternates the two note overlay frames on the beat from 50 combo, and doubles the
+     * rate at 150. Notes also flash on the beat during kiai time.
+     */
+    private fun updateNotePresentation(now: Double) {
+        val timing = controlPoints?.timing?.controlPointAt(now)
+        val beatLength = (timing?.msPerBeat ?: 500.0).coerceAtLeast(1.0)
+        val beatTime = timing?.time ?: 0.0
+
+        val multiplier = when {
+            combo >= COMBO_MILESTONE_FAST_INTERVAL -> 2
+            combo >= COMBO_MILESTONE_INTERVAL -> 1
+            else -> 0
+        }
+
+        val overlayFrame = if (multiplier == 0) {
+            0
+        } else {
+            val period = beatLength * 2.0 / multiplier
+            val phase = (abs(now - beatTime) % period + period) % period
+            if (phase >= beatLength / multiplier) 0 else 1
+        }
+
+        for (index in firstActiveIndex until objects.size) {
+            val obj = objects[index]
+
+            if (obj.startTime - obj.preempt > now) {
+                break
+            }
+            if (obj.judged) {
+                continue
+            }
+
+            if (obj.noteOverlayFrames.size >= 2) {
+                obj.noteOverlayFrames[0].isVisible = overlayFrame == 0
+                obj.noteOverlayFrames[1].isVisible = overlayFrame == 1
+            }
+            obj.noteFlashSprite?.alpha = kiaiFlashAlpha
+        }
+    }
+
     /** The current audio time, in milliseconds. */
     private val currentTime: Double
         get() = if (songHasStarted) songService.positionPrecise else -leadInRemaining
+
+    private fun easeOutQuad(value: Float): Float = 1f - (1f - value) * (1f - value)
+    private fun easeInQuad(value: Float): Float = value * value
 
     private fun updateDecayingEntities(deltaTimeSec: Float) {
         if (decayingEntities.isEmpty()) {
@@ -1092,10 +1517,84 @@ class TaikoGameScene private constructor(
                 continue
             }
 
-            val progress = 1f - (decaying.remaining / decaying.duration).coerceIn(0f, 1f)
-            decaying.entity.x += decaying.velocityX * deltaTimeSec
-            decaying.entity.y += decaying.velocityY * deltaTimeSec
-            decaying.entity.alpha = (1f - progress).coerceIn(0f, 1f)
+            val entity = decaying.entity
+            val elapsed = decaying.duration - decaying.remaining
+            val progress = (elapsed / decaying.duration).coerceIn(0f, 1f)
+
+            when (decaying.motion) {
+                DecayMotion.Linear -> {
+                    entity.x += decaying.velocityX * deltaTimeSec
+                    entity.y += decaying.velocityY * deltaTimeSec
+                    entity.alpha = (1f - progress).coerceIn(0f, 1f)
+                }
+
+                DecayMotion.Miss -> {
+                    entity.x += decaying.velocityX * deltaTimeSec
+                    entity.alpha = (1f - progress).coerceIn(0f, 1f)
+                }
+
+                DecayMotion.HitFly -> {
+                    val fly = elapsed.coerceAtMost(HIT_FLY_DURATION)
+                    val yOffset = if (fly <= HIT_FLY_UP_DURATION) {
+                        -decaying.travelHeight * easeOutQuad(fly / HIT_FLY_UP_DURATION)
+                    } else {
+                        val down = ((fly - HIT_FLY_UP_DURATION) / HIT_FLY_DOWN_DURATION)
+                            .coerceIn(0f, 1f)
+                        -decaying.travelHeight + 2f * decaying.travelHeight * easeInQuad(down)
+                    }
+
+                    entity.x = decaying.originX
+                    entity.y = decaying.originY + yOffset
+
+                    val scaleProgress = (elapsed /
+                        (HIT_FLY_UP_DURATION + HIT_FLY_DOWN_DURATION)).coerceIn(0f, 1f)
+                    entity.setScale(1f + (HIT_FLY_SCALE - 1f) * scaleProgress)
+                    entity.alpha = (1f - elapsed / HIT_FLY_DURATION).coerceIn(0f, 1f)
+                }
+
+                DecayMotion.HitBurst -> {
+                    val scaleUpEnd = HIT_BURST_SCALE_UP
+                    val scaleDownEnd = scaleUpEnd + HIT_BURST_SCALE_DOWN
+                    val scaleSettleEnd = scaleDownEnd + HIT_BURST_SCALE_SETTLE
+
+                    val scale = when {
+                        elapsed < scaleUpEnd ->
+                            HIT_BURST_START_SCALE +
+                                (HIT_BURST_PEAK_SCALE - HIT_BURST_START_SCALE) *
+                                (elapsed / scaleUpEnd)
+
+                        elapsed < scaleDownEnd ->
+                            HIT_BURST_PEAK_SCALE +
+                                (HIT_BURST_DIP_SCALE - HIT_BURST_PEAK_SCALE) *
+                                ((elapsed - scaleUpEnd) / HIT_BURST_SCALE_DOWN)
+
+                        elapsed < scaleSettleEnd ->
+                            HIT_BURST_DIP_SCALE +
+                                (1f - HIT_BURST_DIP_SCALE) *
+                                ((elapsed - scaleDownEnd) / HIT_BURST_SCALE_SETTLE)
+
+                        else -> 1f
+                    }
+
+                    entity.setScale(scale)
+                    entity.alpha = if (elapsed < HIT_BURST_FADE_IN) {
+                        elapsed / HIT_BURST_FADE_IN
+                    } else {
+                        (1f - (elapsed - HIT_BURST_FADE_IN) / HIT_BURST_FADE_OUT)
+                            .coerceIn(0f, 1f)
+                    }
+                }
+
+                DecayMotion.RollTick -> {
+                    entity.setScale(1f + 0.4f * progress)
+                    entity.alpha = (1f - progress).coerceIn(0f, 1f)
+                }
+
+                DecayMotion.SwellClear -> {
+                    entity.setScale(1f + 0.05f * progress)
+                    entity.alpha = (1f - progress).coerceIn(0f, 1f)
+                }
+            }
         }
     }
 
@@ -1173,7 +1672,7 @@ class TaikoGameScene private constructor(
                     ObjectKind.Drumroll -> {
                         // A roll is anchored by its head rather than centred on its start time,
                         // so its body extends forward towards the end of the roll.
-                        entity.x = x - rollHeight / 2f
+                        entity.x = x - obj.rollHeight / 2f
                         entity.y = laneY - entity.height / 2f
                     }
 
@@ -1208,23 +1707,25 @@ class TaikoGameScene private constructor(
     }
 
     /**
-     * Drives a denden's two rings.
+     * Drives stable's shaker presentation.
      *
-     * The target ring is the fixed outline the player is filling towards: it eases out to full
-     * size shortly after the swell lands on the hit target and then holds. The expanding ring
-     * grows and brightens out of the centre as the counter fills, so progress reads from the shape
-     * of the swell rather than only from the number in the middle.
+     * `spinner-approachcircle` shrinks towards `spinner-circle` over the swell's duration, the
+     * circle rotates anti-clockwise on each counted hit, the warning is shown only while the swell
+     * is still approaching, and an outline ring fills as the counter goes down.
      */
     private fun updateSwellVisuals(obj: TaikoObject, now: Double) {
-        obj.swellTargetRing?.let { ring ->
-            val elapsed = now - obj.startTime - SWELL_RING_APPEAR_OFFSET
-            val grow = (elapsed / SWELL_RING_GROW_DURATION).coerceIn(0.0, 1.0).toFloat()
+        val duration = (obj.endTime - obj.startTime).coerceAtLeast(1.0)
+        val progress = ((now - obj.startTime) / duration).coerceIn(0.0, 1.0).toFloat()
 
-            // Ease out, so the ring arrives quickly and settles rather than creeping outwards.
-            val eased = 1f - (1f - grow) * (1f - grow)
-
-            resizeCentred(ring, swellDiameter + (swellRingMaxDiameter - swellDiameter) * eased)
+        obj.swellApproachRing?.let { ring ->
+            ring.setScale(
+                SWELL_APPROACH_START_SCALE + (1f - SWELL_APPROACH_START_SCALE) * progress
+            )
+            ring.alpha = 0.65f
         }
+
+        obj.swellCircle?.rotation = obj.swellRotation
+        obj.swellWarning?.isVisible = now < obj.startTime
 
         obj.swellExpandingRing?.let { ring ->
             val completion = if (obj.requiredHits <= 0) {
@@ -1233,19 +1734,9 @@ class TaikoGameScene private constructor(
                 (obj.hitsSoFar.toFloat() / obj.requiredHits).coerceIn(0f, 1f)
             }
 
-            val reach = (completion * 1.3f).coerceAtMost(1f)
-
-            resizeCentred(ring, swellDiameter + (swellRingMaxDiameter - swellDiameter) * reach)
-            ring.alpha = (completion * 0.55f).coerceIn(0f, 0.55f)
+            ring.setPortion(completion)
+            ring.alpha = 0.85f
         }
-    }
-
-    /** Resizes a denden ring while keeping it centred inside the denden's entity box. */
-    private fun resizeCentred(component: UIComponent, diameter: Float) {
-        component.width = diameter
-        component.height = diameter
-        component.x = (swellRingMaxDiameter - diameter) / 2f
-        component.y = (swellRingMaxDiameter - diameter) / 2f
     }
 
     private fun processAutoPlay(now: Double) {
@@ -1288,9 +1779,7 @@ class TaikoGameScene private constructor(
     private var lastAutoDendenTime = 0.0
 
     private fun autoHitNote(obj: TaikoObject, isKat: Boolean) {
-        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
-        inputFlashTimeRemaining = INPUT_FLASH_DURATION
-
+        flashDrum(isKat)
         registerNoteHit(obj, isKat, bothColours = obj.isBig, now = obj.startTime)
     }
 
@@ -1303,10 +1792,9 @@ class TaikoGameScene private constructor(
             return
         }
 
-        inputFlash.color = DON_COLOR
-        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        flashDrum(false)
         playInputSound(false, now)
-        registerRollHit(obj, false, now)
+        registerRollHit(obj, now)
     }
 
     private fun autoHitDenden(obj: TaikoObject, now: Double) {
@@ -1317,8 +1805,7 @@ class TaikoGameScene private constructor(
 
         // Flip colour every hit; hitting the same colour twice would not count.
         val isKat = obj.lastHitKat != true
-        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
-        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        flashDrum(isKat)
         playInputSound(isKat, now)
         registerDendenHit(obj, isKat, now)
     }
@@ -1327,83 +1814,219 @@ class TaikoGameScene private constructor(
         ObjectKind.Don, ObjectKind.Kat -> createNoteEntity(obj)
 
         ObjectKind.Drumroll -> UIContainer().apply {
-            // osu!lazer draws the body one full height longer than the roll's duration, which is
-            // what pushes the rounded caps outside the head and tail instead of clipping them.
+            // Stable draws a roll as `taiko-roll-middle` stretched across its duration, capped by
+            // `taiko-roll-end` and headed by a tinted `taikobigcircle`. The small `sliderscorepoint`
+            // markers are the only collectable parts of it.
+            val height = if (obj.isBig) bigNoteDiameter else normalNoteDiameter
+            obj.rollHeight = height
+
             val durationWidth = max(
-                80f,
+                height,
                 ((obj.endTime - obj.startTime) * obj.velocity).toFloat()
             )
 
-            width = durationWidth + rollHeight
-            height = rollHeight
+            width = durationWidth + height
+            this.height = height
 
-            obj.rollBody = box {
-                x = 0f
-                y = 0f
-                width = durationWidth + rollHeight
-                height = rollHeight
-                cornerRadius = rollHeight / 2f
-                color = ROLL_IDLE_COLOR
-                alpha = 0.9f
+            val middleTexture = TaikoSkin[TaikoSkinNames.ROLL_MIDDLE]
+            val endTexture = TaikoSkin[TaikoSkinNames.ROLL_END]
+            val headTexture = TaikoSkin[TaikoSkinNames.BIG_CIRCLE]
+                ?: TaikoSkin[TaikoSkinNames.HIT_CIRCLE]
+
+            obj.rollBody = if (middleTexture != null) {
+                sprite {
+                    x = height / 2f
+                    y = 0f
+                    width = durationWidth
+                    height = height
+                    scaleType = ScaleType.Stretch
+                    textureRegion = middleTexture
+                    color = ROLL_IDLE_COLOR
+                    alpha = 0.9f
+                }
+            } else {
+                box {
+                    x = height / 2f
+                    y = 0f
+                    width = durationWidth
+                    height = height
+                    cornerRadius = height / 2f
+                    color = ROLL_IDLE_COLOR
+                    alpha = 0.9f
+                }
             }
 
-            // The head is what the player actually strikes, so it sits over the body.
-            obj.rollHead = circle {
-                x = 0f
-                y = 0f
-                width = rollHeight
-                height = rollHeight
-                color = ROLL_HEAD_COLOR
+            if (endTexture != null) {
+                sprite {
+                    x = durationWidth
+                    y = 0f
+                    width = height
+                    height = height
+                    scaleType = ScaleType.Stretch
+                    textureRegion = endTexture
+                    color = ROLL_IDLE_COLOR
+                }
+            } else {
+                circle {
+                    x = durationWidth
+                    y = 0f
+                    width = height
+                    height = height
+                    color = ROLL_IDLE_COLOR
+                }
+            }
+
+            obj.rollHead = if (headTexture != null) {
+                sprite {
+                    x = 0f
+                    y = 0f
+                    width = height
+                    height = height
+                    scaleType = ScaleType.Fit
+                    textureRegion = headTexture
+                    color = ROLL_HEAD_COLOR
+                }
+            } else {
+                circle {
+                    x = 0f
+                    y = 0f
+                    width = height
+                    height = height
+                    color = ROLL_HEAD_COLOR
+                }
+            }
+
+            val tickTexture = TaikoSkin[TaikoSkinNames.ROLL_TICK]
+            val tickSize = height * 0.28f
+
+            obj.tickTimes.forEach { tickTime ->
+                val tickX = (height / 2f + (tickTime - obj.startTime).toFloat() * obj.velocity.toFloat())
+                    .coerceIn(height / 2f, durationWidth)
+
+                val tick = if (tickTexture != null) {
+                    sprite {
+                        x = tickX - tickSize / 2f
+                        y = (height - tickSize) / 2f
+                        width = tickSize
+                        height = tickSize
+                        scaleType = ScaleType.Fit
+                        textureRegion = tickTexture
+                        origin = Anchor.Center
+                    }
+                } else {
+                    circle {
+                        x = tickX - tickSize / 2f
+                        y = (height - tickSize) / 2f
+                        width = tickSize
+                        height = tickSize
+                        color = Color4.White
+                        alpha = 0.85f
+                        origin = Anchor.Center
+                    }
+                }
+
+                obj.tickSprites.add(tick)
             }
         }
 
-        // osu!lazer draws a swell as a lane object rather than as an osu!standard spinner: a
-        // centre circle ringed by a target outline, parked on the hit target while the player
-        // alternates on it.
+        // Stable's shaker: `spinner-circle`, a shrinking `spinner-approachcircle`, a warning while
+        // it approaches, a countdown and an outline ring that fills as the counter goes down.
         ObjectKind.Denden -> UIContainer().apply {
-            width = swellRingMaxDiameter
-            height = swellRingMaxDiameter
+            width = swellBoxDiameter
+            height = swellBoxDiameter
+            origin = Anchor.Center
+
+            val centre = swellBoxDiameter / 2f
+            val approachTexture = TaikoSkin[TaikoSkinNames.SPINNER_APPROACH]
+            val circleTexture = TaikoSkin[TaikoSkinNames.SPINNER_CIRCLE]
+            val warningTexture = TaikoSkin[TaikoSkinNames.SPINNER_WARNING]
+
+            obj.swellApproachRing = if (approachTexture != null) {
+                sprite {
+                    x = centre - spinnerDiameter / 2f
+                    y = centre - spinnerDiameter / 2f
+                    width = spinnerDiameter
+                    height = spinnerDiameter
+                    scaleType = ScaleType.Fit
+                    textureRegion = approachTexture
+                    origin = Anchor.Center
+                    alpha = 0.65f
+                }
+            } else {
+                circle {
+                    x = centre - spinnerDiameter / 2f
+                    y = centre - spinnerDiameter / 2f
+                    width = spinnerDiameter
+                    height = spinnerDiameter
+                    color = Color4.White
+                    alpha = 0.65f
+                    paintStyle = PaintStyle.Outline
+                    lineWidth = 3f
+                    origin = Anchor.Center
+                }
+            }
 
             obj.swellExpandingRing = circle {
-                x = (swellRingMaxDiameter - swellDiameter) / 2f
-                y = (swellRingMaxDiameter - swellDiameter) / 2f
-                width = swellDiameter
-                height = swellDiameter
-                color = SWELL_RING_COLOR
-                alpha = 0f
-            }
-
-            obj.swellTargetRing = circle {
-                x = (swellRingMaxDiameter - swellDiameter) / 2f
-                y = (swellRingMaxDiameter - swellDiameter) / 2f
-                width = swellDiameter
-                height = swellDiameter
-                color = SWELL_TARGET_RING_COLOR
-                alpha = 0.55f
+                val ringSize = spinnerDiameter * 1.25f
+                x = centre - ringSize / 2f
+                y = centre - ringSize / 2f
+                width = ringSize
+                height = ringSize
+                color = Color4(0xFFFFD54F)
+                alpha = 0.85f
                 paintStyle = PaintStyle.Outline
-                lineWidth = 5f
+                lineWidth = 6f
+                startAngle = -90f
+                setPortion(0f)
             }
 
-            circle {
-                x = (swellRingMaxDiameter - swellDiameter) / 2f
-                y = (swellRingMaxDiameter - swellDiameter) / 2f
-                width = swellDiameter
-                height = swellDiameter
-                color = Color4.White
+            obj.swellCircle = if (circleTexture != null) {
+                sprite {
+                    x = centre - spinnerDiameter / 2f
+                    y = centre - spinnerDiameter / 2f
+                    width = spinnerDiameter
+                    height = spinnerDiameter
+                    scaleType = ScaleType.Fit
+                    textureRegion = circleTexture
+                    origin = Anchor.Center
+                }
+            } else {
+                circle {
+                    x = centre - spinnerDiameter / 2f
+                    y = centre - spinnerDiameter / 2f
+                    width = spinnerDiameter
+                    height = spinnerDiameter
+                    color = Color4(0xFFFFC107)
+                    alpha = 0.9f
+                    origin = Anchor.Center
+                }
             }
 
-            circle {
-                val inner = swellDiameter - 10f
-                x = (swellRingMaxDiameter - inner) / 2f
-                y = (swellRingMaxDiameter - inner) / 2f
-                width = inner
-                height = inner
-                color = SWELL_CENTRE_COLOR
+            obj.swellWarning = if (warningTexture != null) {
+                sprite {
+                    x = 0f
+                    y = 0f
+                    width = swellBoxDiameter
+                    height = laneHeight * 0.3f
+                    scaleType = ScaleType.Fit
+                    textureRegion = warningTexture
+                }
+            } else {
+                text {
+                    x = 0f
+                    y = 0f
+                    width = swellBoxDiameter
+                    alignment = Anchor.TopCenter
+                    font = resources.getFont("smallFont")
+                    color = Color4(0xFFFFD54F)
+                    text = "SPINNER!"
+                }
             }
 
             obj.counterText = text {
-                y = swellRingMaxDiameter / 2f - 20f
-                width = swellRingMaxDiameter
+                x = 0f
+                y = centre - 20f
+                width = swellBoxDiameter
                 alignment = Anchor.TopCenter
                 font = resources.getFont("middleFont")
                 color = Color4.White
@@ -1415,23 +2038,22 @@ class TaikoGameScene private constructor(
     /**
      * Builds a don or kat note.
      *
-     * When the running skin provides `taikohitcircle` / `taikobigcircle` the note is that texture
-     * tinted with stable's don or kat colour; otherwise it is drawn as the flat circle stable's
-     * default art produces. osu!stable only shows the note overlay once a combo milestone has been
-     * reached, so the overlay is attached at spawn time based on the current combo.
+     * Stable tints `taikohitcircle` / `taikobigcircle` with the don or kat colour, keeps the
+     * (possibly animated) overlay on top from the start but only starts alternating its frames at
+     * 50 combo, and flashes an additive copy of the body on the beat during kiai time.
      */
     private fun createNoteEntity(obj: TaikoObject): UIComponent {
         val diameter = if (obj.isBig) bigNoteDiameter else normalNoteDiameter
         val noteColor = if (obj.kind == ObjectKind.Kat) KAT_COLOR else DON_COLOR
-
         val body = TaikoSkin.noteBody(obj.isBig)
-        val overlay = TaikoSkin.noteOverlay(obj.isBig)
+        val overlayFrames = TaikoSkin.noteOverlayFrames(obj.isBig)
 
-        return if (body != null) {
-            UIContainer().apply {
-                width = diameter
-                height = diameter
+        return UIContainer().apply {
+            width = diameter
+            height = diameter
+            origin = Anchor.Center
 
+            if (body != null) {
                 obj.noteSprite = sprite {
                     x = 0f
                     y = 0f
@@ -1442,22 +2064,24 @@ class TaikoGameScene private constructor(
                     color = noteColor
                 }
 
-                if (overlay != null && combo >= COMBO_MILESTONE_INTERVAL) {
-                    obj.noteOverlaySprite = sprite {
-                        x = 0f
-                        y = 0f
-                        width = diameter
-                        height = diameter
-                        scaleType = ScaleType.Fit
-                        textureRegion = overlay
-                    }
+                obj.noteFlashSprite = sprite {
+                    x = 0f
+                    y = 0f
+                    width = diameter
+                    height = diameter
+                    scaleType = ScaleType.Fit
+                    textureRegion = body
+                    color = Color4.White
+                    alpha = 0f
                 }
-            }
-        } else {
-            UICircle().apply {
-                width = diameter
-                height = diameter
-                color = Color4.White
+            } else {
+                circle {
+                    x = 0f
+                    y = 0f
+                    width = diameter
+                    height = diameter
+                    color = Color4.White
+                }
 
                 circle {
                     val inset = if (obj.isBig) 7f else 5f
@@ -1469,13 +2093,47 @@ class TaikoGameScene private constructor(
                 }
 
                 circle {
-                    val centerSize = diameter * 0.27f
-                    x = (diameter - centerSize) / 2f
-                    y = (diameter - centerSize) / 2f
-                    width = centerSize
-                    height = centerSize
+                    val centreSize = diameter * 0.27f
+                    x = (diameter - centreSize) / 2f
+                    y = (diameter - centreSize) / 2f
+                    width = centreSize
+                    height = centreSize
                     color = Color4.White
                     alpha = 0.78f
+                }
+
+                obj.noteFlashSprite = circle {
+                    x = 0f
+                    y = 0f
+                    width = diameter
+                    height = diameter
+                    color = Color4.White
+                    alpha = 0f
+                }
+            }
+
+            if (overlayFrames.isNotEmpty()) {
+                obj.noteOverlayFrames = overlayFrames.take(2).mapIndexed { index, region ->
+                    sprite {
+                        x = 0f
+                        y = 0f
+                        width = diameter
+                        height = diameter
+                        scaleType = ScaleType.Fit
+                        textureRegion = region
+                        isVisible = index == 0
+                    }
+                }
+            } else {
+                circle {
+                    x = 0f
+                    y = 0f
+                    width = diameter
+                    height = diameter
+                    color = Color4.White
+                    alpha = 0.55f
+                    paintStyle = PaintStyle.Outline
+                    lineWidth = diameter * 0.045f
                 }
             }
         }
@@ -1509,8 +2167,8 @@ class TaikoGameScene private constructor(
      * double score, but a single correct key still connects for the ordinary value.
      */
     private fun registerInput(isKat: Boolean, now: Double) {
-        inputFlash.color = if (isKat) KAT_COLOR else DON_COLOR
-        inputFlashTimeRemaining = INPUT_FLASH_DURATION
+        flashDrum(isKat)
+        pulseKiaiGlow(now)
 
         // Two taps of opposite colour landing this close together are one simultaneous hit.
         val bothColours = lastInputIsKat != null &&
@@ -1530,7 +2188,7 @@ class TaikoGameScene private constructor(
             ) {
                 lastJudgedNote = null
                 playInputSound(isKat, now)
-                upgradeToStrongHit(pending, isKat)
+                upgradeToStrongHit(pending)
                 return
             }
         }
@@ -1554,7 +2212,7 @@ class TaikoGameScene private constructor(
         }
 
         if (activeRoll != null) {
-            registerRollHit(activeRoll, isKat, now)
+            registerRollHit(activeRoll, now)
             return
         }
 
@@ -1657,9 +2315,10 @@ class TaikoGameScene private constructor(
             } * if (isStrong) 2f else 1f
         )
 
+        isPassing = true
+        pulseKiaiGlow(now)
         checkComboMilestone()
-        showJudgementText(result, isStrong)
-        showBurst(result, isKat)
+        showBurst(result, isStrong)
         playSamples(obj)
         releaseHit(obj)
 
@@ -1672,14 +2331,15 @@ class TaikoGameScene private constructor(
      * A strong hit is worth exactly double what the single key paid, so the upgrade simply pays the
      * original amount again rather than recomputing the judgement.
      */
-    private fun upgradeToStrongHit(obj: TaikoObject, isKat: Boolean) {
+    private fun upgradeToStrongHit(obj: TaikoObject) {
         obj.strongHit = true
         score += obj.judgedScore
 
         addHealth(HEALTH_PER_GREAT)
 
-        showJudgementText(HitResult.Great, true)
-        showBurst(HitResult.Great, isKat)
+        // Stable swaps in the `k` burst when the second key lands on a big note.
+        isPassing = true
+        showBurst(HitResult.Great, true)
     }
 
     /**
@@ -1690,11 +2350,15 @@ class TaikoGameScene private constructor(
      * heal, and each counted hit is worth a flat score regardless of timing.
      */
     private fun registerDendenHit(obj: TaikoObject, isKat: Boolean, now: Double) {
-        triggerHitExplosion(isKat, false, HitResult.Great)
+        pulseKiaiGlow(now)
 
         if (obj.lastHitKat == isKat) {
             return
         }
+
+        // Stable rotates `spinner-circle` anti-clockwise for every counted hit.
+        obj.swellRotation -= SWELL_ROTATION_PER_HIT
+        obj.swellCircle?.rotation = obj.swellRotation
 
         obj.lastHitKat = isKat
         obj.hitsSoFar++
@@ -1705,8 +2369,6 @@ class TaikoGameScene private constructor(
 
         if (obj.hitsSoFar >= obj.requiredHits) {
             completeDenden(obj, now)
-        } else {
-            showJudgement("DEN!", Color4(0xFFFFC107))
         }
     }
 
@@ -1718,20 +2380,24 @@ class TaikoGameScene private constructor(
         score += scoreForHit(baseScoreValue(HitResult.Great, true), isKiaiAt(now))
 
         showJudgement("CLEAR!", Color4(0xFFFFD54F))
+        setMascotState(MascotState.Clear, COMBO_MILESTONE_DURATION)
+        isPassing = true
 
         obj.judged = true
         obj.counterText = null
-        obj.swellTargetRing = null
+        obj.swellCircle = null
+        obj.swellApproachRing = null
         obj.swellExpandingRing = null
+        obj.swellWarning = null
 
         obj.entity?.let { entity ->
+            entity.origin = Anchor.Center
             decayingEntities.add(
                 DecayingEntity(
                     entity,
                     DENDEN_CLEAR_DECAY_DURATION,
                     DENDEN_CLEAR_DECAY_DURATION,
-                    0f,
-                    -90f
+                    motion = DecayMotion.SwellClear
                 )
             )
         }
@@ -1745,11 +2411,15 @@ class TaikoGameScene private constructor(
     private fun expireDenden(obj: TaikoObject) {
         if (obj.hitsSoFar < obj.requiredHits) {
             addHealth(HEALTH_PER_DENDEN_FAIL)
+            setMascotState(MascotState.Fail, MASCOT_FAIL_DURATION)
+            isPassing = false
         }
 
         obj.counterText = null
-        obj.swellTargetRing = null
+        obj.swellCircle = null
+        obj.swellApproachRing = null
         obj.swellExpandingRing = null
+        obj.swellWarning = null
         expire(obj)
     }
 
@@ -1761,8 +2431,8 @@ class TaikoGameScene private constructor(
      * faster than the ticks appear collects nothing extra, and tapping too slowly simply lets ticks
      * go by. Missed ticks carry no score penalty, but they do cool the body's colour back down.
      */
-    private fun registerRollHit(obj: TaikoObject, isKat: Boolean, now: Double) {
-        triggerHitExplosion(isKat, obj.isBig, HitResult.Great)
+    private fun registerRollHit(obj: TaikoObject, now: Double) {
+        pulseKiaiGlow(now)
 
         // Step past any ticks whose window has already closed.
         while (
@@ -1783,11 +2453,28 @@ class TaikoGameScene private constructor(
             return
         }
 
+        val collectedIndex = obj.nextTickIndex
         obj.nextTickIndex++
         obj.ticksHit++
         obj.rollingHits = (obj.rollingHits + 1).coerceAtMost(ROLL_ENGAGED_HITS)
         updateRollColour(obj)
         score += if (obj.isBig) BIG_ROLL_TICK_SCORE else ROLL_TICK_SCORE
+        animateRollTick(obj, collectedIndex)
+    }
+
+    /** Stable pops a collected `sliderscorepoint` to 1.4x and fades it out over 200ms. */
+    private fun animateRollTick(obj: TaikoObject, index: Int) {
+        val tick = obj.tickSprites.getOrNull(index) ?: return
+
+        tick.origin = Anchor.Center
+        decayingEntities.add(
+            DecayingEntity(
+                tick,
+                ROLL_TICK_ANIM_DURATION,
+                ROLL_TICK_ANIM_DURATION,
+                motion = DecayMotion.RollTick
+            )
+        )
     }
 
     /**
@@ -1930,8 +2617,11 @@ class TaikoGameScene private constructor(
         combo = 0
         lastJudgedNote = null
         addHealth(HEALTH_PER_MISS)
-        showJudgement("MISS", Color4(0xFFB0BEC5))
-        showBurst(HitResult.Miss, obj.kind == ObjectKind.Kat)
+
+        // A miss swaps the scroller to `taiko-slider-fail` and plays pippidon's fail animation.
+        isPassing = false
+        setMascotState(MascotState.Fail, MASCOT_FAIL_DURATION)
+        showBurst(HitResult.Miss, false)
         releaseMiss(obj)
     }
 
@@ -1943,96 +2633,141 @@ class TaikoGameScene private constructor(
     private fun checkComboMilestone() {
         if (combo > 0 && combo % COMBO_MILESTONE_INTERVAL == 0) {
             milestoneTimeRemaining = COMBO_MILESTONE_DURATION
+            setMascotState(MascotState.Clear, COMBO_MILESTONE_DURATION)
         }
     }
 
     /**
-     * Fires the burst at the judgement circle.
+     * Fires stable's hit burst at the judgement circle.
      *
-     * When the skin provides `taiko-hit300` and friends that sprite is used; the expanding ring is
-     * drawn either way, because stable's default effect applies on top of the skinned burst.
+     * Stable uses `taiko-hit300`/`taiko-hit100`/`taiko-hit0`, swapping to the `k` sprite for a big
+     * note's second hit. Static sprites get the legacy 120ms fade-in / 180ms fade-out and a quick
+     * 0.6 -> 1.1 -> 0.9 -> 1 scale pop; animated bursts keep their own frames. When no skin
+     * provides a burst, a ring plus the judgement value is drawn with the same animation.
      */
-    private fun showBurst(result: HitResult, isKat: Boolean) {
-        val texture = TaikoSkin.burstFor(result, isKat)
+    private fun showBurst(result: HitResult, isStrong: Boolean) {
+        val frames = TaikoSkin.burstFrames(result, isStrong)
+        val ringColor = when (result) {
+            HitResult.Great -> Color4(0xFFFFD54F)
+            HitResult.Good -> Color4(0xFF81D4FA)
+            HitResult.Miss -> Color4(0xFFB0BEC5)
+        }
+        val label = when (result) {
+            HitResult.Great -> "300"
+            HitResult.Good -> "100"
+            HitResult.Miss -> "×"
+        }
 
-        if (texture != null) {
-            val sprite = UISprite(texture).apply {
-                x = targetX - burstDiameter / 2f
-                y = laneY - burstDiameter / 2f
-                width = burstDiameter
-                height = burstDiameter
-                scaleType = ScaleType.Fit
+        val burst = UIContainer().apply {
+            x = targetX - burstDiameter / 2f
+            y = laneY - burstDiameter / 2f
+            width = burstDiameter
+            height = burstDiameter
+            origin = Anchor.Center
+
+            when {
+                frames.size > 1 -> {
+                    val animated = UIAnimatedSprite(
+                        frames.map { it as TextureRegion? }.toTypedArray()
+                    ).apply {
+                        x = 0f
+                        y = 0f
+                        width = burstDiameter
+                        height = burstDiameter
+                        scaleType = ScaleType.Fit
+                        frameTime = HIT_BURST_DURATION / frames.size.toFloat()
+                        isLoop = false
+                    }
+                    attachChild(animated)
+                }
+
+                frames.size == 1 -> {
+                    sprite {
+                        x = 0f
+                        y = 0f
+                        width = burstDiameter
+                        height = burstDiameter
+                        scaleType = ScaleType.Fit
+                        textureRegion = frames[0]
+                    }
+                }
+
+                else -> {
+                    circle {
+                        x = 0f
+                        y = 0f
+                        width = burstDiameter
+                        height = burstDiameter
+                        color = ringColor
+                        alpha = 0.85f
+                        paintStyle = PaintStyle.Outline
+                        lineWidth = burstDiameter * 0.08f
+                    }
+
+                    text {
+                        x = 0f
+                        y = burstDiameter / 2f - 20f
+                        width = burstDiameter
+                        alignment = Anchor.TopCenter
+                        font = resources.getFont("middleFont")
+                        color = ringColor
+                        text = label
+                    }
+                }
             }
-            playfield.attachChild(sprite)
-            decayingEntities.add(
-                DecayingEntity(sprite, JUDGEMENT_DURATION, JUDGEMENT_DURATION, 0f, -70f)
-            )
         }
 
-        triggerHitExplosion(isKat, false, result)
+        playfield.attachChild(burst)
+        decayingEntities.add(
+            DecayingEntity(
+                burst,
+                HIT_BURST_DURATION,
+                HIT_BURST_DURATION,
+                motion = DecayMotion.HitBurst
+            )
+        )
     }
 
     /**
-     * Fires the expanding ring at the judgement circle. The size follows the note that was hit, but
-     * the position never does, which is what keeps the feedback readable at high scroll speeds.
-     */
-    private fun triggerHitExplosion(isKat: Boolean, isBig: Boolean, result: HitResult) {
-        if (result == HitResult.Miss) {
-            return
-        }
-
-        explosionBaseDiameter = if (isBig) bigNoteDiameter else normalNoteDiameter
-        hitExplosion.color = if (isKat) KAT_COLOR else DON_COLOR
-        explosionTimeRemaining = EXPLOSION_DURATION
-    }
-
-    private fun showJudgementText(result: HitResult, isStrong: Boolean) {
-        when (result) {
-            HitResult.Great -> showJudgement(
-                if (isStrong) "GREAT x2" else "GREAT",
-                Color4(0xFFFFD54F)
-            )
-
-            HitResult.Good -> showJudgement("GOOD", Color4(0xFF81D4FA))
-            HitResult.Miss -> showJudgement("MISS", Color4(0xFFB0BEC5))
-        }
-    }
-
-    /**
-     * Judged as a hit: the note snaps onto the judgement circle and flies up and away almost
-     * immediately, the way osu!stable does it.
-     *
-     * Snapping matters as much as the speed here. Without it the note peels away from wherever it
-     * happened to be when the input landed, which at high scroll speeds reads as a smear trailing
-     * behind the drum; stable always launches the note from the centre of the target instead.
+     * Judged as a hit: the note snaps onto the judgement circle, rises over 300ms, falls over the
+     * next 600ms, shrinks to 0.8 and fades out over 800ms. Stable always launches the note from the
+     * centre of the target, which avoids a smear trailing behind the drum at high scroll speeds.
      */
     private fun releaseHit(obj: TaikoObject) {
         obj.judged = true
         obj.noteSprite = null
-        obj.noteOverlaySprite = null
+        obj.noteOverlayFrames = emptyList()
+        obj.noteFlashSprite = null
 
         obj.entity?.let { entity ->
-            entity.x = targetX - entity.width / 2f
-            entity.y = laneY - entity.height / 2f
+            val startX = targetX - entity.width / 2f
+            val startY = laneY - entity.height / 2f
+
+            entity.origin = Anchor.Center
+            entity.x = startX
+            entity.y = startY
 
             decayingEntities.add(
                 DecayingEntity(
                     entity,
-                    HIT_DECAY_DURATION,
-                    HIT_DECAY_DURATION,
-                    HIT_DECAY_VELOCITY_X,
-                    HIT_DECAY_VELOCITY_Y
+                    HIT_FLY_DURATION,
+                    HIT_FLY_DURATION,
+                    motion = DecayMotion.HitFly,
+                    originX = startX,
+                    originY = startY,
+                    travelHeight = laneHeight
                 )
             )
         }
         obj.entity = null
     }
 
-    /** Judged as a miss: the note keeps travelling at its own speed and fades out. */
+    /** Judged as a miss: the note keeps scrolling at its own speed while it fades over 100ms. */
     private fun releaseMiss(obj: TaikoObject) {
         obj.judged = true
         obj.noteSprite = null
-        obj.noteOverlaySprite = null
+        obj.noteOverlayFrames = emptyList()
+        obj.noteFlashSprite = null
 
         obj.entity?.let { entity ->
             decayingEntities.add(
@@ -2040,8 +2775,8 @@ class TaikoGameScene private constructor(
                     entity,
                     MISS_DECAY_DURATION,
                     MISS_DECAY_DURATION,
-                    -(obj.velocity * 1000.0).toFloat(),
-                    0f
+                    motion = DecayMotion.Miss,
+                    velocityX = -(obj.velocity * 1000.0).toFloat()
                 )
             )
         }
