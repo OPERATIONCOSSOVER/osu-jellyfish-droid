@@ -1,6 +1,6 @@
-name: Taiko Beta Release
+name: osu!jellyfish Release
 
-# Manually dispatched build-and-publish for the osu!taiko stable release.
+# Manually dispatched build-and-publish for an osu!jellyfish stable release.
 #
 # This copy lives on the release branch and is dispatched with `--ref` pointing at that branch so
 # the checked-out workflow definition matches the code being released. The `ref` input below is the
@@ -24,11 +24,9 @@ on:
 
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 concurrency:
-  group: taiko-stable-release-${{ github.event.inputs.tag }}
+  group: osu-jellyfish-release-${{ github.event.inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -46,36 +44,7 @@ jobs:
         uses: ./.github/actions/setup-java-gradle
 
       - name: Assemble release APK
-        shell: bash
-        run: |
-          set -o pipefail
-          ./gradlew assembleRelease --stacktrace --console=plain 2>&1 | tee full-build.log > /dev/null
-          status=${PIPESTATUS[0]}
-          {
-            echo '### Gradle errors'
-            grep -E "^(e: |error: |FAILURE:|What went wrong|Execution failed|> Task .*FAILED|Caused by:|Unresolved|None of the following)" full-build.log || true
-          } | tee build-errors.log
-          cat build-errors.log >> "$GITHUB_STEP_SUMMARY"
-          exit $status
-
-      - name: Report build errors on PR #47
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.inputs.tag }}
-        run: |
-          {
-            echo "## Gradle errors for $RELEASE_TAG"
-            echo '```'
-            cat build-errors.log 2>/dev/null || true
-            echo
-            echo '### Tail of full build log'
-            tail -n 300 full-build.log 2>/dev/null || true
-            echo '```'
-          } > pr-comment.md
-
-          gh pr comment 47 --body-file pr-comment.md
+        run: ./gradlew assembleRelease
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
