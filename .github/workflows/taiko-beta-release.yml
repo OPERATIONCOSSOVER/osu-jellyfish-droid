@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: taiko-stable-release-${{ github.event.inputs.tag }}
@@ -56,18 +57,31 @@ jobs:
           cat build-errors.log >> "$GITHUB_STEP_SUMMARY"
           exit $status
 
-      - name: Attach build log to branch on failure
+      - name: Report build errors as an issue
         if: failure()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_REF: ${{ github.event.inputs.ref }}
+          RELEASE_TAG: ${{ github.event.inputs.tag }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f full-build.log build-errors.log
-          git commit -m "Add release build log for debugging" || true
-          git push origin "HEAD:refs/heads/$TARGET_REF"
+          {
+            echo "## Gradle errors for $RELEASE_TAG"
+            echo '```'
+            cat build-errors.log 2>/dev/null || true
+            echo
+            echo '### Tail of full build log'
+            tail -n 300 full-build.log 2>/dev/null || true
+            echo '```'
+          } > issue-body.md
+
+          title="Release build log ($RELEASE_TAG)"
+          issue_number=$(gh issue list --search "in:title $title" --limit 1 --json number --jq '.[0].number // empty')
+
+          if [ -n "$issue_number" ]; then
+            gh issue comment "$issue_number" --body-file issue-body.md
+          else
+            gh issue create --title "$title" --body-file issue-body.md
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
