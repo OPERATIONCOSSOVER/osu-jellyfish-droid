@@ -82,7 +82,21 @@ public class ResourceManager {
         "play-skip-",
         "scorebar-colour-",
         "sliderb",
-        "sliderfollowcircle-"
+        "sliderfollowcircle-",
+        // osu!taiko's frame-by-frame elements. Pippidon frames have no hyphen before the index.
+        "taiko-hit0-",
+        "taiko-hit100-",
+        "taiko-hit100k-",
+        "taiko-hit300-",
+        "taiko-hit300g-",
+        "taiko-hit300k-",
+        "taikohitcircleoverlay-",
+        "taikobigcircleoverlay-",
+        "taiko-flower-group-",
+        "pippidonidle",
+        "pippidonkiai",
+        "pippidonfail",
+        "pippidonclear"
     };
 
     /**
@@ -109,25 +123,51 @@ public class ResourceManager {
      */
     private static final String[] TAIKO_SKIN_TEXTURES = {
         "taiko-bar-left",
+        "taiko-bar-right",
+        "taiko-bar-right-glow",
         "taiko-drum-inner",
         "taiko-drum-outer",
         "taiko-slider",
         "taiko-slider-fail",
         "taiko-glow",
+        "taiko-roll-middle",
+        "taiko-roll-end",
+        "taiko-barline",
+        "spinner-warning",
+        "taiko-flower-group",
+        "pippidonidle",
+        "pippidonkiai",
+        "pippidonfail",
+        "pippidonclear",
         "taikohitcircle",
         "taikobigcircle",
         "taikohitcircleoverlay",
         "taikobigcircleoverlay",
         "taiko-hit300",
         "taiko-hit300k",
+        "taiko-hit300g",
         "taiko-hit100",
         "taiko-hit100k",
         "taiko-hit0",
     };
 
+    /**
+     * Whether a texture belongs to the osu!taiko skin set.
+     *
+     * Frame filenames are accepted too, so beatmap skins can provide e.g. `taiko-hit300-0.png`
+     * or `pippidonidle0.png` without a built-in counterpart to be matched against.
+     */
     private static boolean isTaikoSkinTexture(String name) {
         for (var texture : TAIKO_SKIN_TEXTURES) {
             if (texture.equals(name)) {
+                return true;
+            }
+        }
+
+        for (var prefix : ANIMATABLE_TEXTURES) {
+            if ((prefix.startsWith("taiko-") || prefix.startsWith("taikohit")
+                    || prefix.startsWith("taikobig") || prefix.startsWith("pippidon"))
+                    && name.startsWith(prefix)) {
                 return true;
             }
         }
@@ -297,7 +337,13 @@ public class ResourceManager {
 
         try {
 
-            String[] availableAnimatableFilenames = filter(availableFiles.keySet().toArray(new String[0]), f -> any(ANIMATABLE_TEXTURES, f::startsWith)).toArray(new String[0]);
+            // Only actual frame filenames belong here. A plain prefix test would also catch static
+            // names such as `pippidonidle.png`, whose later parseFrameIndex() would clear the frame
+            // count built up by `pippidonidle0.png` and friends.
+            String[] availableAnimatableFilenames = filter(
+                    availableFiles.keySet().toArray(new String[0]),
+                    f -> ANIMATABLE_TEXTURE_REGEX.matchEntire(f) != null
+            ).toArray(new String[0]);
 
             boolean isDefaultSkin = Objects.equals(folder, Config.getSkinTopPath());
 
@@ -847,9 +893,13 @@ public class ResourceManager {
         String delimiter = "-";
 
         // osu!taiko elements are accepted on their own merits, since a beatmap skin may provide
-        // them even though the built-in asset pack does not.
-        if (parseFrameIndex(resname, true, true) < 0 && !textures.containsKey(resname)
-                && !isTaikoSkinTexture(resname)) {
+        // them even though the built-in asset pack does not. Taiko names skip the frame check: a
+        // static file such as `taiko-hit300.png` must not clear the count of a `taiko-hit300-*.png`
+        // animation loaded from the same skin folder.
+        boolean isTaiko = isTaikoSkinTexture(resname);
+        int frameIndex = isTaiko ? -1 : parseFrameIndex(resname, true, true);
+
+        if (frameIndex < 0 && !textures.containsKey(resname) && !isTaiko) {
             if (textures.containsKey(resname + "-0") || textures.containsKey(resname + "0")) {
                 if (textures.containsKey(resname + "0")) {
                     delimiter = "";
@@ -895,6 +945,17 @@ public class ResourceManager {
                     customTextures.put("sliderendcircleoverlay", region);
                 }
             }
+        }
+
+        // Beatmap skins load one file at a time, so the frame count for an animation has to be
+        // refreshed after each frame is registered. Static names are skipped: parseFrameIndex()
+        // would otherwise clear the count belonging to an animation with the same base name.
+        if (ANIMATABLE_TEXTURE_REGEX.matchEntire(resname) != null) {
+            parseFrameIndex(resname, false, true);
+        } else if (isTaiko) {
+            // A beatmap skin's static taiko element must shadow any animated frames coming from
+            // the user skin. A zero count makes getFrameCount() resolve to the static texture.
+            customFrameCount.putIfAbsent(resname, 0);
         }
     }
 

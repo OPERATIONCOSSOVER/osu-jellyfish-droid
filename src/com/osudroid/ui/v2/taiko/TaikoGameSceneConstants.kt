@@ -6,20 +6,66 @@ import com.reco1l.framework.Color4
  * Tuning constants for the osu!taiko beta scene.
  *
  * These previously lived in TaikoGameScene's companion object. They are grouped here so the
- * numbers that define how the ruleset looks and scores can be read and adjusted in one place,
- * without scrolling through the scene's behaviour.
+ * numbers that define how the ruleset looks, animates and scores can be read and adjusted in one
+ * place.
  *
- * Wherever osu!stable's behaviour can be verified, the value here matches it and the source is
- * cited:
+ * The presentation numbers are transcribed from osu!stable's 768px reference playfield as
+ * reproduced by osu!lazer (TaikoPlayfield.BASE_HEIGHT = 200, INPUT_DRUM_WIDTH = 180, the
+ * hit target at x = 180 + 200 / 2 - 24 = 256, playfield y = 216). The animation timings come
+ * from lazer's stable-compatibility layer (LegacyHitExplosion, LegacyInputDrum, LegacyKiaiGlow,
+ * LegacyCirclePiece, DrawableHit) and the osu!wiki osu!taiko skinning article:
  *
- * - Note tints are the colours stable multiplies `taikohitcircle.png` / `taikobigcircle.png` by
- *   (Skinning/osu!taiko).
- * - Scoring is ScoreV1 as documented in Gameplay/Score/ScoreV1/osu!taiko.
- * - Health behaviour follows Game_mode/osu!taiko: drain is disabled, the bar starts empty and a
- *   run only passes once it is at least half full.
- * - Hit windows live in `TaikoHitWindow` rather than here, because they are shared with the
- *   difficulty calculator.
+ * - https://osu.ppy.sh/wiki/en/Skinning/osu!taiko
+ * - https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Taiko/UI/TaikoPlayfield.cs
+ * - https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Taiko/Skinning/Legacy/LegacyHitExplosion.cs
+ * - https://github.com/ppy/osu/blob/master/osu.Game.Rulesets.Taiko/Objects/Drawables/DrawableHit.cs
+ *
+ * Scoring is ScoreV1 as documented in Gameplay/Score/ScoreV1/osu!taiko. Health behaviour follows
+ * Game_mode/osu!taiko: drain is disabled, the bar starts empty and a run only passes once it is
+ * at least half full. Hit windows live in `TaikoHitWindow` because they are shared with the
+ * difficulty calculator.
  */
+
+// --- Stable playfield geometry -----------------------------------------------------------------
+
+/** osu!stable's internal gamefield is 480px tall; its skin assets are authored against 768px. */
+internal const val STABLE_GAMEFIELD_HEIGHT = 480f
+internal const val STABLE_REFERENCE_HEIGHT = 768f
+
+/** Top of the 200px taiko bar, and the bar's height, in the 768px reference space. */
+internal const val STABLE_PLAYFIELD_Y = 216f
+internal const val STABLE_PLAYFIELD_HEIGHT = 200f
+
+/** Width of `taiko-bar-left` and the input drum. */
+internal const val STABLE_INPUT_DRUM_WIDTH = 180f
+
+/** Centre of the judgement circle: 180 (drum) + 100 (half bar) - 24 (stable's offset). */
+internal const val STABLE_HIT_TARGET_X = 256f
+
+/** Stable's normal note is 0.475 of the playfield height; a strong note is 1/0.65 times that. */
+internal const val STABLE_NORMAL_NOTE_SCALE = 0.475f
+internal const val STABLE_STRONG_SCALE = 1f / 0.65f
+
+/** Legacy `approachcircle` / `taikobigcircle` scales on the hit target. */
+internal const val STABLE_APPROACH_SCALE = 0.83f
+internal const val STABLE_BIG_TARGET_SCALE = 0.8f
+internal const val STABLE_APPROACH_ALPHA = 0.47f
+internal const val STABLE_BIG_TARGET_ALPHA = 0.22f
+
+/**
+ * Stable scrolls notes at 0.1px/ms in its 480px gamefield at base velocity, and applies an extra
+ * 1.4 multiplier to slider velocity in taiko (see lazer's TaikoPlayfieldAdjustmentContainer and
+ * TaikoBeatmapConverter.VELOCITY_MULTIPLIER).
+ */
+internal const val STABLE_BASE_SCROLL_PX_PER_MS = 0.1
+internal const val STABLE_TAIKO_VELOCITY_MULTIPLIER = 1.4
+
+/** `taiko-slider` scrolls left at 0.1px/ms in the 768px reference space. */
+internal const val STABLE_SCROLLER_PX_PER_MS = 0.1f
+
+/** Clamps for extreme slider velocities, so notes never spawn absurdly early or late. */
+internal const val MIN_PREEMPT = 200.0
+internal const val MAX_PREEMPT = 6000.0
 
 // --- Note colours -----------------------------------------------------------------------------
 
@@ -38,45 +84,76 @@ internal val ROLL_IDLE_COLOR = Color4(0xFFFBC02D)
 /** Colour a drum roll reaches once it is being collected steadily. */
 internal val ROLL_ENGAGED_COLOR = Color4(0xFFF9A825)
 
+/** Fallback colours for the parts stable skins with art. */
+internal val TAIKO_BAR_COLOR = Color4(0xFF1B1B22)
+internal val TAIKO_BAR_TOP_COLOR = Color4(0xFF2C2C36)
+internal val TAIKO_PANEL_COLOR = Color4(0xFFE91E8C)
+internal val TAIKO_SCROLLER_COLOR = Color4(0xFFFF9800)
+internal val TAIKO_SCROLLER_WAVE_COLOR = Color4(0xFFFFC046)
+internal val TAIKO_SCROLLER_FAIL_COLOR = Color4(0xFF4A2B32)
+internal val KIAI_GLOW_COLOR = Color4(0xFFFFE400)
+
 // --- Presentation timings ---------------------------------------------------------------------
 
 internal const val SONG_INTRO_DURATION_MS = 2000L
-internal const val INPUT_FLASH_DURATION = 0.12f
 internal const val SKIP_TOUCH_RADIUS = 250f
 
-/** How long a combo milestone burst is shown for. */
-internal const val COMBO_MILESTONE_DURATION = 0.45f
+/** Stable's drum halves flash in over 80ms, hold for 100ms, then fade out over 50ms. */
+internal const val DRUM_FLASH_IN = 0.08f
+internal const val DRUM_FLASH_HOLD = 0.1f
+internal const val DRUM_FLASH_OUT = 0.05f
+internal const val DRUM_FLASH_DURATION = DRUM_FLASH_IN + DRUM_FLASH_HOLD + DRUM_FLASH_OUT
 
-// --- Scroll speed -----------------------------------------------------------------------------
-
-/** Pixels travelled per beat at slider velocity 1.0, on an 800px reference playfield. */
-internal const val TAIKO_SCROLL_PX_PER_BEAT = 175.0
-internal const val REFERENCE_PLAYFIELD_WIDTH = 800f
-
-/** Clamps for extreme slider velocities, so notes never spawn absurdly early or late. */
-internal const val MIN_PREEMPT = 200.0
-internal const val MAX_PREEMPT = 6000.0
-
-// --- Hit feedback -----------------------------------------------------------------------------
-
-internal const val EXPLOSION_DURATION = 0.12f
-internal const val EXPLOSION_GROWTH = 0.6f
-internal const val EXPLOSION_ALPHA = 0.85f
-
-internal const val JUDGEMENT_DURATION = 0.35f
-internal const val JUDGEMENT_DRIFT = 18f
+/** Legacy hit burst: 120ms fade in, 180ms fade out, with a 0.6 -> 1.1 -> 0.9 -> 1 pop. */
+internal const val HIT_BURST_FADE_IN = 0.12f
+internal const val HIT_BURST_FADE_OUT = 0.18f
+internal const val HIT_BURST_DURATION = HIT_BURST_FADE_IN + HIT_BURST_FADE_OUT
+internal const val HIT_BURST_SCALE_UP = 0.096f
+internal const val HIT_BURST_SCALE_DOWN = 0.048f
+internal const val HIT_BURST_SCALE_SETTLE = 0.024f
+internal const val HIT_BURST_START_SCALE = 0.6f
+internal const val HIT_BURST_PEAK_SCALE = 1.1f
+internal const val HIT_BURST_DIP_SCALE = 0.9f
 
 /**
- * Hit notes clear almost instantly, as in osu!stable. A longer drift leaves struck notes lingering
- * over the lane and makes dense patterns hard to read.
+ * A hit note snaps to the judgement circle, rises over 300ms, falls over the next 600ms, scales
+ * to 0.8 and fades over 800ms. Stable rates these independently of the playback rate.
  */
-internal const val HIT_DECAY_DURATION = 0.12f
-internal const val HIT_DECAY_VELOCITY_X = -90f
-internal const val HIT_DECAY_VELOCITY_Y = -1150f
-internal const val MISS_DECAY_DURATION = 0.22f
+internal const val HIT_FLY_UP_DURATION = 0.3f
+internal const val HIT_FLY_DOWN_DURATION = 0.6f
+internal const val HIT_FLY_DURATION = 0.8f
+internal const val HIT_FLY_SCALE = 0.8f
 
-/** A cleared denden lingers a little longer than a note, so the clear reads. */
-internal const val DENDEN_CLEAR_DECAY_DURATION = 0.4f
+/** Missed notes fade out in 100ms while they keep scrolling past the judgement circle. */
+internal const val MISS_DECAY_DURATION = 0.1f
+
+/** Roll ticks pop to 1.4x and fade out over 200ms. */
+internal const val ROLL_TICK_ANIM_DURATION = 0.2f
+
+/** Denden clear: 300ms fade with a small 5% scale-up. */
+internal const val DENDEN_CLEAR_DECAY_DURATION = 0.3f
+
+/** Judgement text (used for swell progress/clear) drifts up and fades over 800ms. */
+internal const val JUDGEMENT_DURATION = 0.8f
+internal const val JUDGEMENT_DRIFT = 36f
+
+/** Kiai glow fades in over 100ms, out over 600ms, and pulses for 80ms on a hit. */
+internal const val KIAI_GLOW_FADE_IN = 0.1f
+internal const val KIAI_GLOW_FADE_OUT = 0.6f
+internal const val KIAI_GLOW_PULSE = 0.08f
+internal const val KIAI_GLOW_PULSE_SCALE = 1.1875f
+
+/** `taiko-bar-right-glow` and the scroller's fail state crossfade over 200ms. */
+internal const val BAR_GLOW_FADE = 0.2f
+internal const val SCROLLER_FAIL_FADE = 0.2f
+
+/** Kiai note flash peaks at 0.3 alpha and decays over max(80ms, beat length - 80ms). */
+internal const val KIAI_FLASH_ALPHA = 0.3f
+internal const val KIAI_FLASH_MIN_DURATION = 80.0
+
+/** How long a combo milestone / mascot clear state is shown for. */
+internal const val COMBO_MILESTONE_DURATION = 0.8f
+internal const val MASCOT_FAIL_DURATION = 0.6f
 
 // --- Dendens (swells) -------------------------------------------------------------------------
 
@@ -86,26 +163,11 @@ internal const val DENDEN_CLEAR_DECAY_DURATION = 0.4f
  */
 internal const val SWELL_HIT_MULTIPLIER = 1.65
 
-/**
- * How far a denden's rings grow beyond its centre circle.
- *
- * osu!lazer uses 5x, which only fits because its playfield is far taller than this lane. This is
- * the largest ring that stays inside the lane.
- */
-internal const val SWELL_RING_MAX_SCALE = 1.9f
+/** Stable's `spinner-approachcircle` shrinks from this scale to 1 over the swell's duration. */
+internal const val SWELL_APPROACH_START_SCALE = 1.6f
 
-/**
- * Delay after a denden lands on the hit target before its target ring starts growing, in
- * milliseconds. Matches osu!lazer's ring_appear_offset.
- */
-internal const val SWELL_RING_APPEAR_OFFSET = 100.0
-
-/** How long a denden's target ring takes to reach full size, in milliseconds. */
-internal const val SWELL_RING_GROW_DURATION = 400.0
-
-internal val SWELL_RING_COLOR = Color4(0xFFFFF176)
-internal val SWELL_TARGET_RING_COLOR = Color4(0xFFFBC02D)
-internal val SWELL_CENTRE_COLOR = Color4(0xFFFFC107)
+/** The spinner circle rotates anti-clockwise on every counted hit. */
+internal const val SWELL_ROTATION_PER_HIT = 24f
 
 // --- Scoring (ScoreV1, osu!stable) -------------------------------------------------------------
 
@@ -186,8 +248,8 @@ internal const val ROLL_SLOW_BPM_THRESHOLD = 125.0
 internal const val STRONG_INPUT_WINDOW = 45.0
 
 /**
- * Stable celebrates a combo milestone every 50 hits rather than osu!'s 25, and speeds the note
- * overlay animation up again at 150.
+ * Stable starts animating the note overlay at 50 combo and doubles its rate at 150; it celebrates
+ * a combo milestone every 50 hits rather than osu!'s 25.
  */
 internal const val COMBO_MILESTONE_INTERVAL = 50
 internal const val COMBO_MILESTONE_FAST_INTERVAL = 150

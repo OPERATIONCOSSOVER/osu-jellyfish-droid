@@ -1,10 +1,10 @@
-name: Taiko Beta Release
+name: osu!jellyfish Release
 
-# Manually dispatched build-and-publish for the osu!taiko beta pre-releases.
+# Manually dispatched build-and-publish for an osu!jellyfish stable release.
 #
-# GitHub only lists workflow_dispatch workflows that exist on the default branch, so this file
-# lives on master while the code being released is checked out from the `ref` input. Run it from
-# the Actions tab and pick the branch you want to build.
+# This copy lives on the release branch and is dispatched with `--ref` pointing at that branch so
+# the checked-out workflow definition matches the code being released. The `ref` input below is the
+# branch/tag/commit whose sources are built.
 
 on:
   workflow_dispatch:
@@ -12,26 +12,26 @@ on:
       ref:
         description: "Branch, tag or commit to build"
         required: true
-        default: "master"
+        default: "arena/674f3044-osu-jellyfish-droid"
       tag:
         description: "Release tag"
         required: true
-        default: "20260727-taiko-beta.12.5"
+        default: "STABLE1152026"
       title:
         description: "Release title"
         required: true
-        default: "osu!jellyfish Taiko Beta 12.5"
+        default: "osu!jellyfish STABLE1152026"
 
 permissions:
   contents: write
 
 concurrency:
-  group: taiko-beta-release-${{ github.event.inputs.tag }}
+  group: osu-jellyfish-release-${{ github.event.inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   release:
-    name: Build and publish Taiko beta APK
+    name: Build and publish osu!jellyfish release
     runs-on: ubuntu-latest
 
     steps:
@@ -43,18 +43,18 @@ jobs:
       - name: Set up JDK 17 and Gradle
         uses: ./.github/actions/setup-java-gradle
 
-      - name: Assemble pre-release APK
-        run: ./gradlew assemblePre_release
+      - name: Assemble release APK
+        run: ./gradlew assembleRelease
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: osu-jellyfish-${{ github.event.inputs.tag }}
-          path: build/outputs/apk/pre_release/*.apk
+          path: build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub pre-release
+      - name: Publish GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,40 +66,31 @@ jobs:
           RELEASE_TARGET="$(git rev-parse HEAD)"
 
           mapfile -t apks < <(
-            find build/outputs/apk/pre_release -maxdepth 1 -type f -name '*.apk' -print
+            find build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
           )
 
           if (( ${#apks[@]} == 0 )); then
-            echo "No Taiko beta APK was produced." >&2
+            echo "No release APK was produced." >&2
             exit 1
           fi
 
           cat > release-notes.md <<'EOF'
-          ## osu!jellyfish Taiko Beta 12.5
+          ## osu!jellyfish STABLE1152026
 
-          A follow-up to Beta 12 covering the custom intro theme and a round of Taiko work.
+          First stable-labelled release built from the osu!stable osu!taiko presentation redesign (PR #47).
 
-          ### Fixed
+          ### Highlights
 
-          - **Picked .osz files silently falling back to the bundled theme.** The importer only
-            looked for audio at the very top level of the extracted .osz, so any .osz that wraps
-            its contents in a folder resolved to no audio at all and reset the setting. The
-            extracted files are now searched recursively, and import failures report why instead
-            of quietly reverting.
+          - Rebuilt the taiko playfield around stable's 768x480 reference geometry: lane `y=216`, height `200`, input drum width `180`, hit target `x=256`, scaled to the viewport.
+          - Added stable skin layers: `taiko-slider` / `taiko-slider-fail`, `taiko-bar-right` / `taiko-bar-right-glow`, `taiko-bar-left`, drum inner/outer halves, `taiko-glow`, `approachcircle`, pippidon mascot, flower milestone and drawn fallbacks.
+          - Added stable-timed gameplay animations: drum half flashes, hit bursts with strong `k` variants, flying hits and misses, roll ticks, denden clear, kiai glow / beat flash, animated note overlays, combo milestones and pippidon fail / clear states.
+          - Extended skin loading for taiko and pippidon frame sequences, and fixed shared-texture flip and beatmap-skin frame-count handling.
+          - Preserved PR #46 ScoreV1, `TaikoHitWindow`, health, strong-hit, roll-tick, denden and results behaviour.
+          - In-app version is now `STABLE1152026`; the `-taiko-beta.12.9` suffix and the "Taiko BETA" app label are gone.
 
-          ### Changed
+          ### Verification
 
-          - **"Now playing" shows the intro.** While the intro is playing, the main menu names the
-            intro's own artist and title, read from the .osu inside the .osz, instead of an
-            unrelated beatmap picked out of your library.
-          - **The cookie beats to the intro.** The logo pulse and the kiai star bursts now follow
-            the intro's own timing points, so the beat matches what you are actually hearing.
-          - **The intro is only for opening the game.** It plays on the main menu at launch and
-            stops for good once you head into song select or multiplayer. Coming back to the menu
-            uses the beatmap you selected in song select, matching osu!stable.
-          - **Changing the theme takes effect on the next launch.** The intro's metadata and
-            timing are read once while the menu is being built, so picking or resetting a theme
-            now tells you to restart rather than swapping the audio out from under the menu.
+          Built by GitHub Actions with JDK 17 and Android NDK 22.1.7171670. Unit tests and lint are not part of this release workflow.
           EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -108,11 +99,12 @@ jobs:
               --target "$RELEASE_TARGET" \
               --title "$RELEASE_TITLE" \
               --notes-file release-notes.md \
-              --prerelease
+              --latest \
+              --prerelease=false
           else
             gh release create "$RELEASE_TAG" "${apks[@]}" \
               --target "$RELEASE_TARGET" \
               --title "$RELEASE_TITLE" \
               --notes-file release-notes.md \
-              --prerelease
+              --latest
           fi
