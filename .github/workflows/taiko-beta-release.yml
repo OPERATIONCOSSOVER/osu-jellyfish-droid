@@ -44,7 +44,17 @@ jobs:
         uses: ./.github/actions/setup-java-gradle
 
       - name: Assemble release APK
-        run: ./gradlew assembleRelease
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease --stacktrace --console=plain 2>&1 | tee full-build.log > /dev/null
+          status=${PIPESTATUS[0]}
+          {
+            echo '### Gradle errors'
+            grep -E "^(e: |error: |FAILURE:|What went wrong|Execution failed|> Task .*FAILED|Caused by:|Unresolved|None of the following)" full-build.log || true
+          } | tee build-errors.log
+          cat build-errors.log >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
